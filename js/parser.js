@@ -1,13 +1,5 @@
-/**
- * Parser DNI argentino - Extracción completa
- * Soporta: QR nuevo DNI, PDF417 viejo, MRZ del dorso
- */
-
 const DNIParser = (() => {
 
-  // ==========================================
-  // HELPERS COMUNES
-  // ==========================================
   function fechaDMYtoISO(fechaStr) {
     if (!fechaStr) return null;
     const limpio = String(fechaStr).trim();
@@ -57,43 +49,28 @@ const DNIParser = (() => {
     return edad >= 0 ? edad : null;
   }
 
-  function estaVigente(fechaVencimientoISO) {
-    if (!fechaVencimientoISO) return null;
-    const venc = new Date(fechaVencimientoISO);
+  function estaVigente(fechaISO) {
+    if (!fechaISO) return null;
+    const venc = new Date(fechaISO);
     if (isNaN(venc)) return null;
     return venc > new Date();
   }
 
-  // ==========================================
-  // PARSER QR DEL NUEVO DNI
-  // Formato: NroTramite@Apellido@Nombre@Sexo@DNI@Ejemplar@FechaNac@FechaEmision@[CUIL]@...
-  // ==========================================
+  // ============ QR NUEVO DNI ============
   function parsearQR(texto) {
     const contenido = String(texto || '').trim().replace(/^\uFEFF/, '');
     if (!contenido) return null;
 
-    // Formato del nuevo DNI (QR): campos separados por @
-    // Formato observado: <nroTramite>@<apellido>@<nombre>@<sexo>@<dni>@<ejemplar>@<fechaNac>@<fechaEmision>@...
     const partes = contenido.split('@').map(p => p.trim());
-
-    // Necesitamos al menos 7 campos
     if (partes.length < 7) return null;
 
     const [
-      nroTramite,
-      apellido,
-      nombre,
-      sexo,
-      dni,
-      ejemplar,
-      fechaNacDMY,
-      fechaEmisionDMY,
-      ...resto
+      nroTramite, apellido, nombre, sexo, dni, ejemplar,
+      fechaNacDMY, fechaEmisionDMY, ...resto
     ] = partes;
 
     if (!/^\d{7,8}$/.test(dni)) return null;
 
-    // Buscar CUIL en los campos restantes (formato XX-XXXXXXXX-X o XX X XXXXXXXX X)
     let cuil = null;
     for (const campo of resto) {
       const m = String(campo).match(/^(\d{2})[-\s]?(\d{8})[-\s]?(\d)$/);
@@ -128,10 +105,7 @@ const DNIParser = (() => {
     };
   }
 
-  // ==========================================
-  // PARSER PDF417 (DNI viejo)
-  // Formato variable, usualmente con @ como separador
-  // ==========================================
+  // ============ PDF417 ============
   function parsearPDF417(texto) {
     const contenido = String(texto || '');
     const partes = contenido.split(/[@\r\n]+/).map(p => p.trim()).filter(Boolean);
@@ -139,67 +113,36 @@ const DNIParser = (() => {
     const datos = {
       metodo: 'pdf417',
       raw: contenido,
-      dni: null,
-      apellido: null,
-      nombre: null,
-      nombreCompleto: null,
-      sexo: null,
-      fechaNacimiento: null,
-      fechaEmision: null,
-      fechaVencimiento: null,
-      edad: null,
-      nacionalidad: 'ARGENTINA',
-      lugarNacimiento: null,
-      domicilio: null,
-      tramite: null,
-      ejemplar: null,
-      cuil: null,
-      tipoDocumento: 'DNI',
-      pais: 'ARG',
-      esNuevoDNI: false,
-      vigente: null
+      dni: null, apellido: null, nombre: null, nombreCompleto: null,
+      sexo: null, fechaNacimiento: null, fechaEmision: null, fechaVencimiento: null,
+      edad: null, nacionalidad: 'ARGENTINA', lugarNacimiento: null, domicilio: null,
+      tramite: null, ejemplar: null, cuil: null,
+      tipoDocumento: 'DNI', pais: 'ARG', esNuevoDNI: false, vigente: null
     };
 
-    // Detectar campos por patrones
     const fechas = [];
 
     for (const parte of partes) {
-      // DNI (7-8 dígitos)
-      if (!datos.dni && /^\d{7,8}$/.test(parte)) {
-        datos.dni = parte;
-        continue;
-      }
-      // Sexo
+      if (!datos.dni && /^\d{7,8}$/.test(parte)) { datos.dni = parte; continue; }
       if (!datos.sexo && /^(M|F|X|MASCULINO|FEMENINO)$/i.test(parte)) {
-        datos.sexo = normalizarSexo(parte);
-        continue;
+        datos.sexo = normalizarSexo(parte); continue;
       }
-      // Ejemplar (letra sola, no M/F/X)
       if (!datos.ejemplar && /^[A-Z]$/i.test(parte) && !/^[MFX]$/i.test(parte)) {
-        datos.ejemplar = parte.toUpperCase();
-        continue;
+        datos.ejemplar = parte.toUpperCase(); continue;
       }
-      // Fechas
       if (/^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}$/.test(parte)) {
-        fechas.push(fechaDMYtoISO(parte));
-        continue;
+        fechas.push(fechaDMYtoISO(parte)); continue;
       }
-      // CUIL
       if (!datos.cuil) {
         const mC = parte.match(/^(\d{2})[-\s]?(\d{8})[-\s]?(\d)$/);
         if (mC) { datos.cuil = `${mC[1]}-${mC[2]}-${mC[3]}`; continue; }
       }
-      // Número de trámite (10-14 dígitos)
       if (!datos.tramite && /^\d{10,14}$/.test(parte) && parte !== datos.dni) {
-        datos.tramite = parte;
-        continue;
+        datos.tramite = parte; continue;
       }
-      // Tipo documento
       if (/^(DNI|LC|LE|CI|PASAPORTE)$/i.test(parte)) {
-        datos.tipoDocumento = normalizarTipoDoc(parte);
-        continue;
+        datos.tipoDocumento = normalizarTipoDoc(parte); continue;
       }
-      // Nombres/apellidos (solo letras, 3+ caracteres)
       if (/^[A-ZÁÉÍÓÚÑa-záéíóúñ\s]{3,}$/.test(parte) &&
           !/^(ARGENTINA|ARG|REPUBLICA|REPÚBLICA|EJEMPLAR|TRAMITE|TRÁMITE|NACIONALIDAD|MERCOSUR|IDARG|DNI|APELLIDO|NOMBRE)$/i.test(parte)) {
         const up = parte.toUpperCase().trim();
@@ -208,18 +151,15 @@ const DNIParser = (() => {
       }
     }
 
-    // Fallback: buscar DNI en el texto completo si no apareció
     if (!datos.dni) {
       const m = contenido.match(/\b(\d{7,8})\b/);
       if (m) datos.dni = m[1];
     }
 
-    // Asignar fechas según orden: nacimiento, emisión, vencimiento
     if (fechas[0]) datos.fechaNacimiento = fechas[0];
     if (fechas[1]) datos.fechaEmision = fechas[1];
     if (fechas[2]) datos.fechaVencimiento = fechas[2];
 
-    // Nombre completo
     if (datos.apellido || datos.nombre) {
       datos.nombreCompleto = `${datos.apellido || ''} ${datos.nombre || ''}`.trim();
     }
@@ -227,15 +167,11 @@ const DNIParser = (() => {
     datos.edad = calcularEdad(datos.fechaNacimiento);
     datos.vigente = estaVigente(datos.fechaVencimiento);
 
-    // Si no hay nada útil, devolver null
     if (!datos.dni && !datos.apellido && !datos.nombre) return null;
-
     return datos;
   }
 
-  // ==========================================
-  // PARSER MRZ (dorso del DNI)
-  // ==========================================
+  // ============ MRZ ============
   function esMRZ(texto) {
     const limpio = String(texto || '').toUpperCase();
     const tieneID = /ID[A-Z]{3}\d{6,}/.test(limpio.replace(/[\s<]/g, ''));
@@ -254,11 +190,7 @@ const DNIParser = (() => {
     } else {
       const todo = lineasLimp.join('');
       if (todo.length < 60) return null;
-      lineasMRZ = [
-        todo.substring(0, 30),
-        todo.substring(30, 60),
-        todo.substring(60, 90) || ''
-      ];
+      lineasMRZ = [todo.substring(0, 30), todo.substring(30, 60), todo.substring(60, 90) || ''];
     }
     lineasMRZ = lineasMRZ.map(l => (l + '<'.repeat(30)).substring(0, 30));
 
@@ -274,31 +206,20 @@ const DNIParser = (() => {
       metodo: 'mrz',
       raw: texto,
       dni: l1.substring(5, 14).replace(/</g, '') || null,
-      apellido: null,
-      nombre: null,
-      nombreCompleto: null,
+      apellido: null, nombre: null, nombreCompleto: null,
       sexo: l2.charAt(7) === 'M' ? 'Masculino' : l2.charAt(7) === 'F' ? 'Femenino' : null,
       fechaNacimiento: fechaYYMMDDtoISO(l2.substring(0, 6)),
       fechaEmision: null,
       fechaVencimiento: fechaYYMMDDtoISO(l2.substring(8, 14)),
-      edad: null,
-      nacionalidad: null,
-      lugarNacimiento: null,
-      domicilio: null,
-      tramite: null,
-      ejemplar: null,
-      cuil: null,
-      tipoDocumento: 'DNI',
-      pais: l1.substring(2, 5) || null,
-      esNuevoDNI: true,
-      vigente: null
+      edad: null, nacionalidad: null, lugarNacimiento: null, domicilio: null,
+      tramite: null, ejemplar: null, cuil: null,
+      tipoDocumento: 'DNI', pais: l1.substring(2, 5) || null,
+      esNuevoDNI: true, vigente: null
     };
 
-    // Nacionalidad (3 letras, posiciones 15-17 de línea 2)
     const nac = l2.substring(15, 18).replace(/</g, '');
     if (nac) datos.nacionalidad = nac === 'ARG' ? 'ARGENTINA' : nac;
 
-    // Apellido y nombre (línea 3)
     const l3clean = l3.replace(/<+$/, '');
     const partes = l3clean.split('<<');
     if (partes[0]) datos.apellido = partes[0].replace(/</g, ' ').trim();
@@ -313,40 +234,20 @@ const DNIParser = (() => {
     return datos;
   }
 
-  // ==========================================
-  // PARSER UNIVERSAL
-  // ==========================================
   function parsear(texto) {
     if (!texto) return null;
-
-    // Intentar QR del nuevo DNI primero
     const porQR = parsearQR(texto);
     if (porQR) return porQR;
-
-    // MRZ
     if (esMRZ(texto)) {
       const porMRZ = parsearMRZ(texto);
       if (porMRZ) return porMRZ;
     }
-
-    // PDF417 genérico
     const porPDF = parsearPDF417(texto);
     if (porPDF) return porPDF;
-
     return null;
   }
 
-  return {
-    parsear,
-    parsearQR,
-    parsearPDF417,
-    parsearMRZ,
-    esMRZ,
-    // helpers por si los necesitás fuera
-    fechaDMYtoISO,
-    normalizarSexo,
-    calcularEdad
-  };
+  return { parsear, parsearQR, parsearPDF417, parsearMRZ, esMRZ };
 })();
 
 console.log('✅ parser.js cargado');
