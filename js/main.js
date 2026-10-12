@@ -8,8 +8,8 @@
   const img = captura.querySelector('img');
   const estado = captura.querySelector('.captura-estado');
   const escaneoEstado = captura.querySelector('.escaneo-estado');
-  const marcoDni = captura.querySelector('.marco-dni');
-  const scanIndicador = captura.querySelector('.scan-indicador');
+  const marcoDni = document.getElementById('scan-frame');
+  const scanIndicador = document.getElementById('camera-hint');
   const btnCamara = captura.querySelector('.btn-camara');
   const btnRepetir = captura.querySelector('.btn-repetir');
   const btnFlash = captura.querySelector('.btn-flash');
