@@ -44,19 +44,48 @@
 
   <section id="resultado" class="resultado" hidden>
     <div class="resultado-header">
-      <h2>Datos detectados</h2>
+      <h2>Datos del DNI</h2>
       <span id="badge-metodo" class="badge">—</span>
     </div>
 
-    <div class="campo"><label>Número de DNI</label><span id="r-dni">—</span></div>
+    <!-- ===== DATOS PERSONALES ===== -->
+    <h3 class="grupo-titulo">👤 Datos personales</h3>
+
+    <div class="campo destacado"><label>Número de DNI</label><span id="r-dni">—</span></div>
     <div class="campo"><label>Apellido/s</label><span id="r-apellido">—</span></div>
     <div class="campo"><label>Nombre/s</label><span id="r-nombre">—</span></div>
+    <div class="campo"><label>Nombre completo</label><span id="r-nombreCompleto">—</span></div>
     <div class="campo"><label>Sexo</label><span id="r-sexo">—</span></div>
     <div class="campo"><label>Fecha de nacimiento</label><span id="r-nacimiento">—</span></div>
-    <div class="campo"><label>Fecha de emisión</label><span id="r-emision">—</span></div>
-    <div class="campo"><label>Número de trámite</label><span id="r-tramite">—</span></div>
-    <div class="campo"><label>Tipo documento</label><span id="r-tipo">—</span></div>
+    <div class="campo"><label>Edad</label><span id="r-edad">—</span></div>
+    <div class="campo"><label>Nacionalidad</label><span id="r-nacionalidad">—</span></div>
+    <div class="campo"><label>Lugar de nacimiento</label><span id="r-lugarNacimiento">—</span></div>
 
+    <!-- ===== DATOS DEL DOCUMENTO ===== -->
+    <h3 class="grupo-titulo">📄 Datos del documento</h3>
+
+    <div class="campo"><label>Tipo de documento</label><span id="r-tipo">—</span></div>
+    <div class="campo"><label>Ejemplar</label><span id="r-ejemplar">—</span></div>
+    <div class="campo"><label>Número de trámite</label><span id="r-tramite">—</span></div>
+    <div class="campo"><label>CUIL</label><span id="r-cuil">—</span></div>
+    <div class="campo"><label>Fecha de emisión</label><span id="r-emision">—</span></div>
+    <div class="campo"><label>Fecha de vencimiento</label><span id="r-vencimiento">—</span></div>
+    <div class="campo"><label>Vigente</label><span id="r-vigente">—</span></div>
+    <div class="campo"><label>País emisor</label><span id="r-pais">—</span></div>
+
+    <!-- ===== DOMICILIO ===== -->
+    <h3 class="grupo-titulo">🏠 Domicilio</h3>
+
+    <div class="campo"><label>Domicilio declarado</label><span id="r-domicilio">—</span></div>
+
+    <!-- ===== VALIDACIONES ===== -->
+    <h3 class="grupo-titulo">✅ Validaciones</h3>
+
+    <div class="campo"><label>DNI válido</label><span id="r-val-dni">—</span></div>
+    <div class="campo"><label>CUIL válido</label><span id="r-val-cuil">—</span></div>
+    <div class="campo"><label>Dígitos de control MRZ</label><span id="r-val-mrz">—</span></div>
+
+    <!-- ===== DEBUG ===== -->
     <details class="raw-data">
       <summary>Ver texto crudo (debug)</summary>
       <pre id="r-raw">—</pre>
