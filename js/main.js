@@ -4,7 +4,7 @@
   // ==========================================
   // DEBUG
   // ==========================================
-  const DEBUG = true; // ← después lo ponés en false
+  const DEBUG = false; // ← después lo ponés en false
 
   function log(msg, color = '#4ade80') {
     if (!DEBUG) return;
