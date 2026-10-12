@@ -1,53 +1,73 @@
 /**
- * Lector de código PDF417 usando ZXing
- * Es el método más fiable para el DNI argentino
+ * Lector de PDF417 con ZXing - versión mejorada
+ * Soporta escaneo continuo desde vídeo y decodificación desde imagen
  */
 
 const PDF417Reader = (() => {
 
+  let hints = null;
   let reader = null;
+
+  function buildHints() {
+    const h = new Map();
+    h.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.PDF_417]);
+    h.set(ZXing.DecodeHintType.TRY_HARDER, true);
+    // PURE_BARCODE ayuda cuando el código está solo sobre fondo claro
+    // pero puede fallar si hay más elementos; lo dejamos desactivado por defecto
+    // h.set(ZXing.DecodeHintType.PURE_BARCODE, true);
+    return h;
+  }
 
   function init() {
     if (reader) return reader;
-    const hints = new Map();
-    hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.PDF_417]);
-    hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+    hints = buildHints();
     reader = new ZXing.BrowserMultiFormatReader(hints, {
-      delayBetweenScanAttempts: 100
+      delayBetweenScanAttempts: 150,
+      delayBetweenScanSuccess: 500
     });
     return reader;
   }
 
   /**
-   * Decodifica un PDF417 desde una imagen (base64, URL o canvas)
-   * @param {string|HTMLCanvasElement|HTMLImageElement} imageSource
-   * @returns {Promise<string|null>} Texto decodificado o null
+   * Decodifica desde una imagen estática (base64, URL, canvas)
    */
   async function decode(imageSource) {
     const r = init();
     try {
       const result = await r.decodeFromImageUrl(imageSource);
-      if (!result) return null;
-      return result.getText();
+      return result ? result.getText() : null;
     } catch (e) {
-      // ZXing lanza error si no encuentra código
       return null;
     }
   }
 
   /**
-   * Escaneo continuo desde un elemento <video>
-   * Llama a onDetected(texto) cuando encuentra un PDF417
-   * @param {HTMLVideoElement} videoElement
-   * @param {Function} onDetected
-   * @returns {Function} Función para detener el escaneo
+   * Decodifica desde un canvas ya dibujado (más rápido que base64)
    */
-  function scanFromVideo(videoElement, onDetected) {
+  async function decodeFromCanvas(canvas) {
+    const r = init();
+    try {
+      const result = await r.decodeFromCanvas(canvas);
+      return result ? result.getText() : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /**
+   * Escaneo continuo desde <video>
+   * Devuelve una función para detener
+   */
+  function scanFromVideo(videoElement, onDetected, onError) {
     const r = init();
     let activo = true;
+    let intentos = 0;
+    const maxIntentos = 300; // ~60 segundos a 200ms
 
     async function loop() {
       if (!activo) return;
+      intentos++;
+
       try {
         const result = await r.decodeFromVideoElement(videoElement);
         if (result && activo) {
@@ -56,8 +76,15 @@ const PDF417Reader = (() => {
           return;
         }
       } catch (e) {
-        // Sin código en este frame, seguir intentando
+        // Silencioso: simplemente no había código en ese frame
       }
+
+      if (intentos >= maxIntentos) {
+        activo = false;
+        if (onError) onError('No se detectó el código después de 60 segundos. Probá con más luz y acercate.');
+        return;
+      }
+
       if (activo) setTimeout(loop, 200);
     }
 
@@ -66,5 +93,5 @@ const PDF417Reader = (() => {
     return () => { activo = false; };
   }
 
-  return { decode, scanFromVideo, init };
+  return { decode, decodeFromCanvas, scanFromVideo, init };
 })();
