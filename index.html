@@ -1,1 +1,88 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Escáner DNI Argentino</title>
+  <meta name="description" content="Escáner de DNI argentino 100% en el navegador. Lee PDF417, OCR y NFC.">
+  <link rel="icon" href="assets/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>🇦🇷 Escáner DNI Argentino</h1>
+      <p class="subtitle">Procesamiento 100% local · Sin servidores · RGPD friendly</p>
+    </header>
 
+    <!-- Zona de cámara / preview -->
+    <div class="video-wrap">
+      <video id="video" autoplay playsinline muted></video>
+      <img id="preview" class="preview" alt="Captura">
+      <canvas id="canvas" style="display:none"></canvas>
+      <div class="overlay" id="overlay">
+        <span class="overlay-label">Enfocá el código PDF417 del frente</span>
+      </div>
+    </div>
+
+    <!-- Controles -->
+    <div class="controls">
+      <button id="btnStart" class="primary">▶ Iniciar cámara</button>
+      <button id="btnScanPDF417" class="primary" disabled>📷 Escanear PDF417</button>
+      <button id="btnScanOCR" class="secondary" disabled>🔍 Escanear con OCR</button>
+      <button id="btnNFC" class="secondary" disabled>📡 Leer chip NFC</button>
+      <button id="btnUpload" class="secondary">📁 Subir imagen</button>
+      <button id="btnReset" class="danger" style="display:none">🔄 Reiniciar</button>
+      <input type="file" id="fileInput" accept="image/*" hidden>
+    </div>
+
+    <!-- Estado -->
+    <div id="loader" class="loader" style="display:none">
+      <span class="spinner"></span>
+      <span id="loaderText">Procesando…</span>
+    </div>
+    <div id="error" class="error" role="alert"></div>
+
+    <!-- Resultado -->
+    <section id="result" class="result">
+      <div class="result-header">
+        <h2>Datos detectados</h2>
+        <span id="badgeMetodo" class="badge">—</span>
+      </div>
+
+      <div class="field"><label>Número de DNI</label><span id="rDni">—</span></div>
+      <div class="field"><label>Apellido/s</label><span id="rApellido">—</span></div>
+      <div class="field"><label>Nombre/s</label><span id="rNombre">—</span></div>
+      <div class="field"><label>Sexo</label><span id="rSexo">—</span></div>
+      <div class="field"><label>Fecha de nacimiento</label><span id="rNacimiento">—</span></div>
+      <div class="field"><label>Fecha de emisión</label><span id="rEmision">—</span></div>
+      <div class="field"><label>Fecha de vencimiento</label><span id="rVencimiento">—</span></div>
+      <div class="field"><label>Ejemplar</label><span id="rEjemplar">—</span></div>
+      <div class="field"><label>Número de trámite</label><span id="rTramite">—</span></div>
+      <div class="field"><label>CUIL</label><span id="rCuil">—</span></div>
+      <div class="field"><label>Nacionalidad</label><span id="rNacionalidad">—</span></div>
+
+      <details class="raw-data">
+        <summary>Ver texto crudo (debug)</summary>
+        <pre id="rRaw">—</pre>
+      </details>
+    </section>
+
+    <footer class="footer">
+      <p>Hecho con ❤️ · <a href="https://github.com/TU-USUARIO/dni-scanner" target="_blank">GitHub</a></p>
+    </footer>
+  </div>
+
+  <!-- Librerías externas -->
+  <script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.0/umd/index.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+
+  <!-- Módulos propios -->
+  <script src="js/validators.js"></script>
+  <script src="js/parser.js"></script>
+  <script src="js/pdf417.js"></script>
+  <script src="js/ocr.js"></script>
+  <script src="js/nfc.js"></script>
+  <script src="js/main.js"></script>
+</body>
+</html>
