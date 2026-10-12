@@ -2,27 +2,19 @@
   'use strict';
 
   // ==========================================
-  // PANEL DE DEBUG EN PANTALLA
+  // PANEL DE DEBUG
   // ==========================================
   function crearPanelDebug() {
     if (document.getElementById('debug-panel')) return;
     const panel = document.createElement('div');
     panel.id = 'debug-panel';
     panel.style.cssText = `
-      position: fixed;
-      bottom: 0;
-      left: 0;
-      right: 0;
-      max-height: 40vh;
-      overflow-y: auto;
-      background: rgba(0,0,0,0.92);
-      color: #4ade80;
-      font-family: monospace;
-      font-size: 11px;
-      padding: 8px 12px;
-      z-index: 99999;
-      border-top: 2px solid #4ade80;
-      line-height: 1.4;
+      position: fixed; bottom: 0; left: 0; right: 0;
+      max-height: 35vh; overflow-y: auto;
+      background: rgba(0,0,0,0.92); color: #4ade80;
+      font-family: monospace; font-size: 11px;
+      padding: 8px 12px; z-index: 99999;
+      border-top: 2px solid #4ade80; line-height: 1.4;
     `;
     panel.innerHTML = '<div style="color:#fff;font-weight:bold;margin-bottom:4px;">🔍 DEBUG (tocá para cerrar)</div><div id="debug-log"></div>';
     panel.addEventListener('click', () => panel.remove());
@@ -41,9 +33,6 @@
   crearPanelDebug();
   log('=== main.js iniciando ===', '#fff');
 
-  // ==========================================
-  // CHECK DE LIBRERÍAS
-  // ==========================================
   log('Validators: ' + (typeof Validators), typeof Validators === 'object' ? '#4ade80' : '#ef4444');
   log('DNIParser: ' + (typeof DNIParser), typeof DNIParser === 'object' ? '#4ade80' : '#ef4444');
   log('DNIScanner: ' + (typeof DNIScanner), typeof DNIScanner === 'object' ? '#4ade80' : '#ef4444');
@@ -51,19 +40,19 @@
   log('BarcodeDetector: ' + (typeof BarcodeDetector), typeof BarcodeDetector === 'function' ? '#4ade80' : '#f59e0b');
 
   // ==========================================
-  // REFERENCIAS DOM
+  // REFERENCIAS DOM (por ID)
   // ==========================================
   const captura = document.getElementById('captura-dni');
-  const video = captura ? captura.querySelector('video') : null;
-  const canvas = captura ? captura.querySelector('canvas') : null;
-  const img = captura ? captura.querySelector('.camera-img') : null;
-  const estado = captura ? captura.querySelector('.captura-estado') : null;
-  const escaneoEstado = captura ? captura.querySelector('.escaneo-estado') : null;
+  const video = document.getElementById('scan-video');
+  const canvas = document.getElementById('scan-canvas');
+  const img = document.getElementById('scan-img');
+  const estado = document.querySelector('.captura-estado');
+  const escaneoEstado = document.querySelector('.escaneo-estado');
   const scanFrame = document.getElementById('scan-frame');
   const cameraHint = document.getElementById('camera-hint');
-  const btnCamara = captura ? captura.querySelector('.btn-camara') : null;
-  const btnRepetir = captura ? captura.querySelector('.btn-repetir') : null;
-  const btnFlash = captura ? captura.querySelector('.flash-btn') : null;
+  const btnCamara = document.getElementById('btn-camara');
+  const btnRepetir = document.getElementById('btn-repetir');
+  const btnFlash = document.getElementById('flash-btn');
   const resultado = document.getElementById('resultado');
   const badgeMetodo = document.getElementById('badge-metodo');
   const statusPill = document.getElementById('status-pill');
@@ -89,22 +78,19 @@
     }
   }
 
-  // Auto-iniciar cámara
-  window.addEventListener('DOMContentLoaded', () => {
-    setTimeout(iniciarCamara, 300);
-  });
-
   // ==========================================
   // CÁMARA
   // ==========================================
   async function iniciarCamara() {
     if (stream) return;
+
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       log('❌ getUserMedia no disponible', '#ef4444');
       if (estado) estado.textContent = 'Este navegador no permite acceder a la cámara.';
       setStatus('Sin cámara', 'error');
       return;
     }
+
     try {
       log('🎥 Pidiendo cámara…', '#f59e0b');
       setStatus('Iniciando cámara…');
@@ -136,10 +122,11 @@
 
       iniciarEscaneoContinuo();
     } catch (err) {
-      log('❌ Error cámara: ' + err.name + ' - ' + err.message, '#ef4444');
+      log('❌ Error cámara: ' + err.name, '#ef4444');
       let msg = 'No se pudo acceder a la cámara.';
-      if (err.name === 'NotAllowedError') msg = 'Permiso denegado.';
-      else if (err.name === 'NotFoundError') msg = 'No hay cámara.';
+      if (err.name === 'NotAllowedError') msg = 'Permiso denegado. Habilitá la cámara en el navegador.';
+      else if (err.name === 'NotFoundError') msg = 'No hay cámara. Probá desde el celular.';
+      else if (err.name === 'NotReadableError') msg = 'La cámara está en uso por otra app.';
       if (estado) estado.textContent = msg;
       setStatus('Error cámara', 'error');
     }
@@ -147,7 +134,7 @@
 
   function iniciarEscaneoContinuo() {
     if (stopScan) stopScan();
-    log('🔍 Iniciando escaneo continuo…', '#f59e0b');
+    log('🔍 Iniciando escaneo…', '#f59e0b');
     if (escaneoEstado) escaneoEstado.textContent = '🔍 Buscando código…';
 
     if (typeof DNIScanner === 'undefined') {
@@ -190,10 +177,10 @@
 
     log('🧩 Parseando…', '#f59e0b');
     const datos = DNIParser.parsear(texto);
-    log('📋 Datos: ' + JSON.stringify(datos).substring(0, 100), '#4ade80');
+    log('📋 Datos: ' + JSON.stringify(datos).substring(0, 80), '#4ade80');
 
     if (!datos || (!datos.dni && !datos.apellido && !datos.nombre)) {
-      log('⚠️ No se extrajeron datos útiles', '#f59e0b');
+      log('⚠️ No se extrajeron datos', '#f59e0b');
       if (estado) estado.textContent = '⚠️ No se extrajeron datos';
       if (escaneoEstado) escaneoEstado.textContent = 'Texto: ' + texto.substring(0, 60);
       setStatus('Sin datos', 'error');
@@ -219,11 +206,9 @@
     const el = document.getElementById(id);
     if (!el) return;
     if (valor === true) {
-      el.textContent = textoSi;
-      el.classList.add('ok');
+      el.textContent = textoSi; el.classList.add('ok');
     } else if (valor === false) {
-      el.textContent = textoNo;
-      el.classList.add('err');
+      el.textContent = textoNo; el.classList.add('err');
     } else {
       el.textContent = '—';
     }
@@ -231,7 +216,6 @@
 
   function render(d) {
     if (badgeMetodo) badgeMetodo.textContent = (d.metodo || 'código').toUpperCase();
-
     setTexto('r-dni', d.dni);
     setTexto('r-apellido', d.apellido);
     setTexto('r-nombre', d.nombre);
@@ -283,6 +267,9 @@
     return check === nums[10];
   }
 
+  // ==========================================
+  // EVENTOS
+  // ==========================================
   if (btnCamara) btnCamara.addEventListener('click', iniciarCamara);
 
   if (btnRepetir) {
@@ -312,6 +299,9 @@
     if (stream) stream.getTracks().forEach(t => t.stop());
     if (stopScan) stopScan();
   });
+
+  // Auto-iniciar cámara
+  setTimeout(iniciarCamara, 300);
 
   log('=== main.js listo ===', '#fff');
 })();
