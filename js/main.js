@@ -1,5 +1,7 @@
 /**
- * Flujo principal: UN botón que hace todo automáticamente
+ * Flujo principal: UN botón, detección automática
+ * - Frente: busca PDF417 + QR
+ * - Dorso: lee MRZ + QR
  */
 
 (() => {
@@ -25,26 +27,19 @@
   let stream = null;
   let stopScanFn = null;
   let escaneando = false;
+  let qrAvisado = false;
 
-  // ---- Helpers UI ----
   const setError = (msg) => { errorEl.textContent = msg; };
   const clearError = () => { errorEl.textContent = ''; };
-  const showLoader = (msg) => {
-    loaderText.textContent = msg;
-    loader.style.display = 'flex';
-  };
+  const showLoader = (msg) => { loaderText.textContent = msg; loader.style.display = 'flex'; };
   const hideLoader = () => { loader.style.display = 'none'; };
 
   function setProgress(percent) {
-    if (percent == null) {
-      progressBar.style.display = 'none';
-      return;
-    }
+    if (percent == null) { progressBar.style.display = 'none'; return; }
     progressBar.style.display = 'block';
     progressFill.style.width = percent + '%';
   }
 
-  // ---- Cámara ----
   async function ensureCamera() {
     if (stream) return;
     stream = await navigator.mediaDevices.getUserMedia({
@@ -61,30 +56,21 @@
   }
 
   function stopCamera() {
-    if (stream) {
-      stream.getTracks().forEach(t => t.stop());
-      stream = null;
-    }
+    if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
   }
 
   function capturar() {
-    const w = video.videoWidth;
-    const h = video.videoHeight;
+    const w = video.videoWidth, h = video.videoHeight;
     if (!w || !h) throw new Error('La cámara no está lista todavía.');
-    canvas.width = w;
-    canvas.height = h;
-    const ctx = canvas.getContext('2d');
-    ctx.drawImage(video, 0, 0, w, h);
+    canvas.width = w; canvas.height = h;
+    canvas.getContext('2d').drawImage(video, 0, 0, w, h);
     return canvas.toDataURL('image/jpeg', 0.95);
   }
 
-  // ---- Escaneo automático en cascada ----
   async function escanearAutomatico() {
-    if (escaneando) {
-      detener();
-      return;
-    }
+    if (escaneando) { detener(); return; }
     escaneando = true;
+    qrAvisado = false;
     clearError();
     btnScan.textContent = '⏹ Detener';
     btnReset.style.display = 'none';
@@ -92,13 +78,20 @@
 
     try {
       await ensureCamera();
-      overlayLabel.textContent = 'Apuntá al código del DNI…';
+      overlayLabel.textContent = 'Apuntá al código de barras o al MRZ';
 
-      // ---- FASE 1: buscar código de barras en vivo (20s) ----
+      window.__onQRSolo = () => {
+        if (!qrAvisado) {
+          qrAvisado = true;
+          overlayLabel.textContent = '⚠️ QR detectado (solo verificación). Apuntá al código alargado o a las 3 líneas MRZ';
+        }
+      };
+
+      const duracion = 15000;
       const inicio = Date.now();
-      const duracion = 20000;
-
       setProgress(0);
+
+      // ---- FASE 1: escaneo de códigos de barras (15s) ----
       const codigo = await new Promise((resolve) => {
         stopScanFn = BarcodeReader.scanFromVideo(
           video,
@@ -106,29 +99,23 @@
           () => resolve(null),
           duracion
         );
-
-        // Barra de progreso animada
         const tick = setInterval(() => {
           const t = (Date.now() - inicio) / duracion;
           setProgress(Math.min(100, t * 100));
           if (t >= 1) clearInterval(tick);
         }, 100);
-
-        // Guardar limpieza
         const orig = stopScanFn;
         stopScanFn = () => { clearInterval(tick); orig && orig(); };
       });
 
       setProgress(null);
-
-      // Si el usuario detuvo manualmente
       if (!escaneando) return;
 
-      // ---- FASE 2: si encontramos código, parsear ----
-      if (codigo) {
+      // ---- FASE 2: si hay código útil, usarlo ----
+      if (codigo && !codigo.esVerificacion) {
         overlayLabel.textContent = '¡Código detectado!';
         const data = DNIParser.parsearUniversal(codigo.texto);
-        if (data) {
+        if (data && (data.dni || data.apellido)) {
           data.metodo = codigo.formato || data.metodo;
           render(data);
           finalizarEscaneo();
@@ -136,9 +123,8 @@
         }
       }
 
-      // ---- FASE 3: fallback a OCR ----
-      overlayLabel.textContent = 'No detecté código. Analizando imagen…';
-      setError('Sin código visible. Aplicando OCR…');
+      // ---- FASE 3: OCR (busca MRZ en el dorso o texto en el frente) ----
+      overlayLabel.textContent = 'Analizando imagen con OCR…';
       showLoader('Ejecutando OCR (puede tardar)…');
 
       const frame = capturar();
@@ -149,11 +135,13 @@
       });
       hideLoader();
 
-      const data = DNIParser.parsearOCR(ocrText);
-      if (data) {
+      const data = DNIParser.parsearUniversal(ocrText);
+      if (data && (data.dni || data.apellido)) {
         render(data);
+      } else if (data && data.esVerificacion) {
+        setError('Solo se detectó el QR de verificación. Apuntá al código alargado (PDF417) del frente o a las 3 líneas MRZ del dorso.');
       } else {
-        setError('No se pudieron extraer datos. Probá con mejor luz o acercate al DNI.');
+        setError('No se pudieron extraer datos. Probá con mejor luz y enfocá el código de barras o las 3 líneas MRZ.');
       }
 
       finalizarEscaneo();
@@ -163,6 +151,8 @@
       setProgress(null);
       setError('Error: ' + e.message);
       finalizarEscaneo();
+    } finally {
+      window.__onQRSolo = null;
     }
   }
 
@@ -184,9 +174,13 @@
     btnReset.style.display = 'inline-block';
   }
 
-  // ---- Render ----
   function render(data) {
     if (!data) return;
+    if (data.esVerificacion) {
+      setError('Este código solo contiene un link de verificación. Apuntá al PDF417 o a la MRZ.');
+      return;
+    }
+
     overlayLabel.textContent = 'Escaneo completado';
     setError('');
 
@@ -217,15 +211,12 @@
     resultBox.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
-  // ---- Eventos ----
   btnScan.addEventListener('click', escanearAutomatico);
-
   btnUpload.addEventListener('click', () => fileInput.click());
 
   fileInput.addEventListener('change', async (e) => {
     const file = e.target.files[0];
     if (!file) return;
-
     clearError();
     btnReset.style.display = 'inline-block';
     resultBox.classList.remove('active');
@@ -241,23 +232,25 @@
 
       showLoader('Analizando imagen…');
       try {
-        // Intentar código primero
+        // 1) Intentar código de barras
         let codigo = await BarcodeReader.decode(src);
-        if (!codigo) {
-          // Probar con escalado x2
+        if (!codigo || codigo.esVerificacion) {
           const escalado = await escalarImagen(src, 2);
-          codigo = await BarcodeReader.decode(escalado);
+          const codigo2 = await BarcodeReader.decode(escalado);
+          if (codigo2 && !codigo2.esVerificacion) codigo = codigo2;
         }
 
-        if (codigo) {
+        if (codigo && !codigo.esVerificacion) {
           hideLoader();
           const data = DNIParser.parsearUniversal(codigo.texto);
-          data.metodo = codigo.formato;
-          render(data);
-          return;
+          if (data && (data.dni || data.apellido)) {
+            data.metodo = codigo.formato;
+            render(data);
+            return;
+          }
         }
 
-        // Fallback a OCR
+        // 2) OCR
         loaderText.textContent = 'Ejecutando OCR…';
         const ocrText = await OCRReader.recognize(src, (m) => {
           if (m.status === 'recognizing text') {
@@ -266,9 +259,9 @@
         });
         hideLoader();
 
-        const data = DNIParser.parsearOCR(ocrText);
-        if (data) render(data);
-        else setError('No se pudieron extraer datos de la imagen.');
+        const data = DNIParser.parsearUniversal(ocrText);
+        if (data && (data.dni || data.apellido)) render(data);
+        else setError('No se pudieron extraer datos. Probá con una foto más nítida.');
 
       } catch (err) {
         hideLoader();
@@ -293,7 +286,6 @@
     ensureCamera().catch(e => setError('No se pudo acceder a la cámara: ' + e.message));
   });
 
-  // ---- Helpers ----
   function escalarImagen(imageSrc, factor = 2) {
     return new Promise(resolve => {
       const img = new Image();
@@ -310,7 +302,6 @@
     });
   }
 
-  // Limpieza
   window.addEventListener('beforeunload', () => {
     stopCamera();
     if (stopScanFn) stopScanFn();
