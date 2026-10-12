@@ -553,3 +553,10 @@ body {
   border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover { background: #3a4050; }
+/* Compatibilidad con el JS (usa clase "activo") */
+.scan-frame.activo { display: block; }
+.flash-btn.activo { display: flex; }
+.icon-btn.encendido {
+  background: rgba(245, 158, 11, 0.9);
+  border-color: rgba(245, 158, 11, 1);
+}
