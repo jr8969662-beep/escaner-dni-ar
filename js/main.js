@@ -2,20 +2,25 @@
   'use strict';
   console.log('🚀 main.js iniciando');
 
+  // ==========================================
+  // REFERENCIAS DOM (ajustadas al nuevo HTML)
+  // ==========================================
   const captura = document.getElementById('captura-dni');
   const video = captura.querySelector('video');
   const canvas = captura.querySelector('canvas');
-  const img = captura.querySelector('img');
+  const img = captura.querySelector('.camera-img');
   const estado = captura.querySelector('.captura-estado');
   const escaneoEstado = captura.querySelector('.escaneo-estado');
-  const marcoDni = document.getElementById('scan-frame');
-  const scanIndicador = document.getElementById('camera-hint');
+  const scanFrame = document.getElementById('scan-frame');
+  const cameraHint = document.getElementById('camera-hint');
   const btnCamara = captura.querySelector('.btn-camara');
   const btnRepetir = captura.querySelector('.btn-repetir');
-  const btnFlash = captura.querySelector('.btn-flash');
+  const btnFlash = captura.querySelector('.flash-btn');
 
   const resultado = document.getElementById('resultado');
   const badgeMetodo = document.getElementById('badge-metodo');
+  const statusPill = document.getElementById('status-pill');
+  const statusText = document.getElementById('status-text');
 
   let stream = null;
   let trackActual = null;
@@ -23,19 +28,35 @@
   let flashSoportado = false;
   let stopScan = null;
 
+  // ==========================================
+  // HELPERS UI
+  // ==========================================
+  function setStatus(texto, tipo = 'idle') {
+    if (!statusText) return;
+    statusText.textContent = texto;
+    statusPill.classList.remove('active', 'error');
+    if (tipo === 'active') statusPill.classList.add('active');
+    if (tipo === 'error') statusPill.classList.add('error');
+  }
+
   // Auto-iniciar cámara
   window.addEventListener('DOMContentLoaded', () => {
     setTimeout(iniciarCamara, 300);
   });
 
+  // ==========================================
+  // CÁMARA
+  // ==========================================
   async function iniciarCamara() {
     if (stream) return;
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       estado.textContent = 'Este navegador no permite acceder a la cámara.';
       estado.classList.add('error');
+      setStatus('Sin cámara', 'error');
       return;
     }
     try {
+      setStatus('Iniciando cámara…');
       stream = await navigator.mediaDevices.getUserMedia({
         video: {
           facingMode: { ideal: 'environment' },
@@ -47,12 +68,13 @@
       video.srcObject = stream;
       video.hidden = false;
       img.hidden = true;
-      marcoDni.classList.add('activo');
-      scanIndicador.classList.add('activo');
+      scanFrame.classList.add('activo');      // ⚠️ clase 'activo' (no 'active')
+      cameraHint.style.opacity = '1';
       btnCamara.hidden = true;
       btnRepetir.hidden = true;
       estado.textContent = 'Apuntá al código del DNI. Se escaneará automáticamente.';
       estado.classList.remove('ok', 'error');
+      setStatus('Cámara activa', 'active');
 
       trackActual = stream.getVideoTracks()[0];
       const caps = trackActual.getCapabilities ? trackActual.getCapabilities() : {};
@@ -67,6 +89,7 @@
       else if (err.name === 'NotFoundError') msg = 'No se encontró cámara.';
       estado.textContent = msg;
       estado.classList.add('error');
+      setStatus('Error de cámara', 'error');
     }
   }
 
@@ -90,15 +113,19 @@
       },
       () => {
         escaneoEstado.textContent = '⏱ No se detectó. Probá con más luz o acercate.';
+        setStatus('Sin detección');
       },
       { intervaloMs: 400, timeoutMs: 20000, anchoMax: 1280 }
     );
   }
 
+  // ==========================================
+  // ÉXITO
+  // ==========================================
   async function exitoEscaneo(texto) {
     if (stopScan) { stopScan(); stopScan = null; }
-    scanIndicador.classList.remove('activo');
-    marcoDni.classList.remove('activo');
+    scanFrame.classList.remove('activo');
+    cameraHint.style.opacity = '0';
     if (flashEncendido && trackActual) {
       trackActual.applyConstraints({ advanced: [{ torch: false }] }).catch(() => {});
       flashEncendido = false;
@@ -120,6 +147,7 @@
       estado.textContent = '⚠️ Código detectado pero no se pudieron extraer datos.';
       estado.classList.add('error');
       escaneoEstado.textContent = 'Texto crudo: ' + texto.substring(0, 80);
+      setStatus('Sin datos', 'error');
       btnRepetir.hidden = false;
       return;
     }
@@ -129,16 +157,18 @@
     estado.classList.add('ok');
     estado.classList.remove('error');
     escaneoEstado.textContent = '✅ Escaneo completado';
+    setStatus('Escaneo OK', 'active');
     btnRepetir.hidden = false;
   }
 
   // ==========================================
-  // RENDER DE TODOS LOS CAMPOS
+  // RENDER
   // ==========================================
   function setTexto(id, valor) {
     const el = document.getElementById(id);
     if (!el) return;
     el.textContent = (valor === null || valor === undefined || valor === '') ? '—' : String(valor);
+    el.classList.remove('ok', 'err');
   }
 
   function setBool(id, valor, textoSi, textoNo) {
@@ -146,20 +176,22 @@
     if (!el) return;
     if (valor === true) {
       el.textContent = textoSi;
-      el.style.color = '#86efac';
+      el.classList.add('ok');
+      el.classList.remove('err');
     } else if (valor === false) {
       el.textContent = textoNo;
-      el.style.color = '#fca5a5';
+      el.classList.add('err');
+      el.classList.remove('ok');
     } else {
       el.textContent = '—';
-      el.style.color = '';
+      el.classList.remove('ok', 'err');
     }
   }
 
   function render(d) {
     badgeMetodo.textContent = (d.metodo || 'código').toUpperCase();
 
-    // Datos personales
+    // Personales
     setTexto('r-dni', d.dni);
     setTexto('r-apellido', d.apellido);
     setTexto('r-nombre', d.nombre);
@@ -170,14 +202,14 @@
     setTexto('r-nacionalidad', d.nacionalidad);
     setTexto('r-lugarNacimiento', d.lugarNacimiento);
 
-    // Datos del documento
+    // Documento
     setTexto('r-tipo', d.tipoDocumento);
     setTexto('r-ejemplar', d.ejemplar);
     setTexto('r-tramite', d.tramite);
     setTexto('r-cuil', d.cuil);
     setTexto('r-emision', d.fechaEmision);
     setTexto('r-vencimiento', d.fechaVencimiento);
-    setBool('r-vigente', d.vigente, '✅ Sí', '❌ Vencido');
+    setBool('r-vigente', d.vigente, '✅ Vigente', '❌ Vencido');
     setTexto('r-pais', d.pais);
 
     // Domicilio
@@ -186,32 +218,23 @@
     // Validaciones
     setBool('r-val-dni', d.dni ? /^\d{7,8}$/.test(d.dni) : null, '✅ Válido', '❌ Inválido');
     setBool('r-val-cuil', d.cuil ? validarCUIL(d.cuil) : null, '✅ Válido', '❌ Inválido');
-
-    // MRZ: check digits
-    if (d.metodo === 'mrz' && d.validacionesMRZ) {
-      const v = d.validacionesMRZ;
-      setBool('r-val-mrz',
-        v.doc && v.dob && v.exp,
-        '✅ Todos OK',
-        '⚠️ Alguno falló');
-    } else {
-      setTexto('r-val-mrz', d.metodo === 'mrz' ? 'Sin verificar' : '—');
-    }
+    setTexto('r-val-mrz', d.metodo === 'mrz' ? 'Sin verificar' : '—');
 
     setTexto('r-raw', d.raw);
 
     resultado.hidden = false;
-    resultado.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    setTimeout(() => {
+      resultado.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 100);
   }
 
   // ==========================================
-  // VALIDACIÓN DE CUIL (módulo 11)
+  // VALIDACIÓN CUIL
   // ==========================================
   function validarCUIL(cuil) {
     if (!cuil) return null;
     const limpio = String(cuil).replace(/[-\s]/g, '');
     if (!/^\d{11}$/.test(limpio)) return false;
-
     const prefijos = ['20', '23', '24', '27', '30', '33', '34', '50', '51', '55'];
     if (!prefijos.includes(limpio.substring(0, 2))) return false;
 
@@ -228,7 +251,6 @@
       else if (pref === '27') check = 4;
       else return false;
     } else check = 11 - resto;
-
     return check === nums[10];
   }
 
