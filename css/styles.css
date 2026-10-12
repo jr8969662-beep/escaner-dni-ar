@@ -1,6 +1,3 @@
-/* ============================
-   Reset y base
-   ============================ */
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
@@ -33,12 +30,10 @@ body {
   gap: 18px;
 }
 
-/* Header */
 header { text-align: center; padding: 6px 0; }
 h1 { font-size: clamp(1.4rem, 4vw, 1.9rem); color: var(--primary); margin-bottom: 4px; }
 .subtitle { font-size: 0.85rem; color: var(--text-muted); }
 
-/* Video */
 .video-wrap {
   position: relative;
   background: var(--surface);
@@ -47,10 +42,7 @@ h1 { font-size: clamp(1.4rem, 4vw, 1.9rem); color: var(--primary); margin-bottom
   aspect-ratio: 16 / 10;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
 }
-video, img.preview {
-  width: 100%; height: 100%;
-  object-fit: cover; display: block;
-}
+video, img.preview { width: 100%; height: 100%; object-fit: cover; display: block; }
 img.preview { display: none; }
 
 .overlay {
@@ -66,58 +58,40 @@ img.preview { display: none; }
   border: 1px solid rgba(56, 189, 248, 0.4);
 }
 
-/* Barra de progreso */
 .progress-bar {
-  height: 6px;
-  background: var(--surface-2);
-  border-radius: 3px;
-  overflow: hidden;
+  height: 6px; background: var(--surface-2);
+  border-radius: 3px; overflow: hidden;
 }
 .progress-fill {
-  height: 100%;
-  width: 0%;
+  height: 100%; width: 0%;
   background: linear-gradient(90deg, var(--primary), var(--success));
   transition: width 0.2s linear;
 }
 
-/* Botones */
-.controls {
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-  justify-content: center;
-}
+.controls { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
 button {
-  padding: 12px 22px;
-  border: none; border-radius: 8px;
-  font-size: 0.95rem; font-weight: 600;
-  cursor: pointer; font-family: inherit;
+  padding: 12px 22px; border: none; border-radius: 8px;
+  font-size: 0.95rem; font-weight: 600; cursor: pointer;
+  font-family: inherit; white-space: nowrap;
   transition: transform 0.15s, box-shadow 0.15s;
-  white-space: nowrap;
 }
 button.primary { background: var(--primary); color: #0f172a; }
 button.primary.big { font-size: 1.05rem; padding: 14px 28px; }
 button.secondary { background: var(--surface-2); color: var(--text); }
 button.danger { background: var(--danger); color: white; }
-button:hover:not(:disabled) {
-  transform: translateY(-2px);
-  box-shadow: 0 6px 18px rgba(56, 189, 248, 0.25);
-}
+button:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 6px 18px rgba(56, 189, 248, 0.25); }
 button:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
 
-/* Loader / Error */
 .loader {
-  display: flex; align-items: center; justify-content: center;
-  gap: 10px; padding: 14px;
-  background: var(--surface); border-radius: 10px;
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  padding: 14px; background: var(--surface); border-radius: 10px;
   color: var(--primary); font-weight: 600;
 }
 .spinner {
   width: 18px; height: 18px;
   border: 3px solid rgba(56, 189, 248, 0.3);
   border-top-color: var(--primary);
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
+  border-radius: 50%; animation: spin 0.8s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -125,20 +99,14 @@ button:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
   color: var(--danger);
   background: rgba(239, 68, 68, 0.1);
   border: 1px solid rgba(239, 68, 68, 0.3);
-  border-radius: 8px;
-  padding: 10px 14px;
-  font-size: 0.9rem;
-  display: none;
+  border-radius: 8px; padding: 10px 14px;
+  font-size: 0.9rem; display: none;
 }
 .error:not(:empty) { display: block; }
 
-/* Resultado */
 .result {
-  background: var(--surface);
-  border-radius: 12px;
-  padding: 20px;
-  display: none;
-  animation: fadeIn 0.3s ease;
+  background: var(--surface); border-radius: 12px;
+  padding: 20px; display: none; animation: fadeIn 0.3s ease;
 }
 .result.active { display: block; }
 @keyframes fadeIn {
@@ -159,6 +127,7 @@ button:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
 }
 .badge.pdf417 { background: rgba(34, 197, 94, 0.2); color: var(--success); }
 .badge.qr     { background: rgba(34, 197, 94, 0.2); color: var(--success); }
+.badge.mrz    { background: rgba(56, 189, 248, 0.2); color: var(--primary); }
 .badge.ocr    { background: rgba(245, 158, 11, 0.2); color: var(--warning); }
 
 .field {
@@ -171,16 +140,10 @@ button:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
 .field label { color: var(--text-muted); font-weight: 600; flex-shrink: 0; }
 .field span { color: var(--text); text-align: right; word-break: break-word; }
 
-/* Raw data */
 .raw-data {
-  margin-top: 16px;
-  border-top: 1px solid var(--surface-2);
-  padding-top: 12px;
+  margin-top: 16px; border-top: 1px solid var(--surface-2); padding-top: 12px;
 }
-.raw-data summary {
-  cursor: pointer; color: var(--text-muted);
-  font-size: 0.85rem; user-select: none;
-}
+.raw-data summary { cursor: pointer; color: var(--text-muted); font-size: 0.85rem; }
 .raw-data pre {
   margin-top: 10px; padding: 12px;
   background: #0b1220; border-radius: 8px;
@@ -189,33 +152,18 @@ button:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
   max-height: 200px; overflow-y: auto;
 }
 
-/* Tips */
 .tips {
-  background: var(--surface);
-  border-left: 4px solid var(--primary);
-  border-radius: 8px;
-  padding: 12px 16px;
-  font-size: 0.88rem;
+  background: var(--surface); border-left: 4px solid var(--primary);
+  border-radius: 8px; padding: 12px 16px; font-size: 0.88rem;
 }
-.tips summary {
-  cursor: pointer; color: var(--primary);
-  font-weight: 600; user-select: none;
-}
-.tips ul {
-  list-style: none; padding: 10px 0 0 0;
-  display: flex; flex-direction: column; gap: 6px;
-}
+.tips summary { cursor: pointer; color: var(--primary); font-weight: 600; user-select: none; }
+.tips ul { list-style: none; padding: 10px 0 0 0; display: flex; flex-direction: column; gap: 6px; }
 .tips li { color: var(--text-muted); }
 
-/* Footer */
-.footer {
-  text-align: center; font-size: 0.8rem;
-  color: var(--text-muted); padding: 12px 0;
-}
+.footer { text-align: center; font-size: 0.8rem; color: var(--text-muted); padding: 12px 0; }
 .footer a { color: var(--primary); text-decoration: none; }
 .footer a:hover { text-decoration: underline; }
 
-/* Responsive */
 @media (max-width: 480px) {
   body { padding: 12px; }
   button { padding: 11px 16px; font-size: 0.9rem; }
