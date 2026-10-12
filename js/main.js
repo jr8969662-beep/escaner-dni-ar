@@ -2,38 +2,50 @@
   'use strict';
 
   // ==========================================
-  // CONFIG
+  // DEBUG
   // ==========================================
-  const DEBUG = false; // ← cambiar a true para ver panel de debug
-  const STORAGE_KEY = 'escaner_dni_historial';
-  const MAX_HISTORIAL = 50;
-
-  // ==========================================
-  // DEBUG PANEL
-  // ==========================================
-  function crearPanelDebug() {
-    if (!DEBUG) return;
-    if (document.getElementById('debug-panel')) return;
-    const panel = document.createElement('div');
-    panel.id = 'debug-panel';
-    panel.style.cssText = `position:fixed;bottom:0;left:0;right:0;max-height:35vh;overflow-y:auto;background:rgba(0,0,0,0.92);color:#4ade80;font-family:monospace;font-size:11px;padding:8px 12px;z-index:99999;border-top:2px solid #4ade80;line-height:1.4;`;
-    panel.innerHTML = '<div style="color:#fff;font-weight:bold;margin-bottom:4px;">🔍 DEBUG (tocá para cerrar)</div><div id="debug-log"></div>';
-    panel.addEventListener('click', () => panel.remove());
-    document.body.appendChild(panel);
-  }
+  const DEBUG = true; // ← después lo ponés en false
 
   function log(msg, color = '#4ade80') {
     if (!DEBUG) return;
-    const debugLog = document.getElementById('debug-log');
+    console.log(msg);
+    const debugLog = document.getElementById('video-debug');
     if (!debugLog) return;
     const line = document.createElement('div');
     line.style.color = color;
     line.textContent = msg;
     debugLog.appendChild(line);
+    debugLog.scrollTop = debugLog.scrollHeight;
+  }
+
+  function crearPanelDebugVideo() {
+    if (!DEBUG) return;
+    const vp = document.querySelector('.camera-viewport');
+    if (!vp || document.getElementById('video-debug-overlay')) return;
+
+    const overlay = document.createElement('div');
+    overlay.id = 'video-debug-overlay';
+    overlay.style.cssText = `
+      position: absolute;
+      top: 8px; left: 8px; right: 8px;
+      max-height: 45%;
+      overflow-y: auto;
+      background: rgba(0,0,0,0.85);
+      color: #4ade80;
+      font-family: monospace;
+      font-size: 10px;
+      padding: 6px 8px;
+      border-radius: 8px;
+      z-index: 9999;
+      line-height: 1.35;
+      border: 1px solid #4ade80;
+    `;
+    overlay.innerHTML = '<div style="color:#fff;font-weight:bold;margin-bottom:3px;">📹 Diagnóstico de cámara</div><div id="video-debug"></div>';
+    vp.appendChild(overlay);
   }
 
   // ==========================================
-  // REFERENCIAS DOM
+  // DOM
   // ==========================================
   const video = document.getElementById('scan-video');
   const canvas = document.getElementById('scan-canvas');
@@ -71,6 +83,7 @@
   let flashSoportado = false;
   let stopScan = null;
   let ultimoResultado = null;
+  let debugInterval = null;
 
   // ==========================================
   // HELPERS
@@ -108,10 +121,41 @@
   }
 
   // ==========================================
-  // CÁMARA
+  // DEBUG EN VIVO
+  // ==========================================
+  function iniciarDebugVideo() {
+    if (!DEBUG) return;
+    if (debugInterval) clearInterval(debugInterval);
+    debugInterval = setInterval(() => {
+      if (!video) return;
+      const info = [
+        `videoWidth: ${video.videoWidth}`,
+        `videoHeight: ${video.videoHeight}`,
+        `readyState: ${video.readyState}/4`,
+        `paused: ${video.paused}`,
+        `hidden: ${video.hidden}`,
+        `display: ${getComputedStyle(video).display}`,
+        `stream: ${stream ? 'activo' : 'null'}`,
+        `tracks: ${stream ? stream.getVideoTracks().length : 0}`
+      ];
+      const debugLog = document.getElementById('video-debug');
+      if (debugLog) {
+        debugLog.innerHTML = info.map(line => {
+          const color = line.includes('null') || line.includes('0') || line.includes('true') || line.includes(': 0') ? '#ef4444' : '#4ade80';
+          return `<div style="color:${color}">${line}</div>`;
+        }).join('');
+      }
+    }, 500);
+  }
+
+  // ==========================================
+  // CÁMARA - VERSIÓN ROBUSTA
   // ==========================================
   async function iniciarCamara() {
-    if (stream) return;
+    if (stream) {
+      log('ℹ️ Ya hay stream activo');
+      return;
+    }
 
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       mostrarErrorCamara('Este navegador no permite acceder a la cámara.');
@@ -119,21 +163,79 @@
       return;
     }
 
+    // Intentar varias configuraciones, de más específica a más genérica
+    const configuraciones = [
+      { video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false },
+      { video: { facingMode: 'environment' }, audio: false },
+      { video: { facingMode: { ideal: 'user' } }, audio: false },
+      { video: true, audio: false }
+    ];
+
+    let ultimoError = null;
+
+    for (let i = 0; i < configuraciones.length; i++) {
+      try {
+        log(`🎥 Intento ${i + 1}/${configuraciones.length}…`, '#f59e0b');
+        setStatus('Iniciando cámara…');
+
+        stream = await navigator.mediaDevices.getUserMedia(configuraciones[i]);
+        log(`✅ Stream OK con config ${i + 1}`, '#4ade80');
+        break;
+      } catch (err) {
+        ultimoError = err;
+        log(`❌ Config ${i + 1} falló: ${err.name}`, '#f59e0b');
+        stream = null;
+      }
+    }
+
+    if (!stream) {
+      let msg = 'No se pudo acceder a la cámara.';
+      if (ultimoError) {
+        if (ultimoError.name === 'NotAllowedError') msg = 'Permiso denegado. Habilitá la cámara.';
+        else if (ultimoError.name === 'NotFoundError') msg = 'No hay cámara disponible.';
+        else if (ultimoError.name === 'NotReadableError') msg = 'La cámara está en uso.';
+      }
+      mostrarErrorCamara(msg);
+      setStatus('Error cámara', 'error');
+      log('❌ Ninguna configuración funcionó', '#ef4444');
+      return;
+    }
+
+    // ====== ASIGNAR AL VIDEO ======
     try {
-      ocultarErrorCamara();
-      setStatus('Iniciando cámara…');
-
-      stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: { ideal: 'environment' },
-          width: { ideal: 1920 },
-          height: { ideal: 1080 }
-        },
-        audio: false
-      });
-
       video.srcObject = stream;
       video.hidden = false;
+      video.setAttribute('autoplay', '');
+      video.setAttribute('playsinline', '');
+      video.setAttribute('muted', '');
+      video.muted = true;
+
+      // Forzar play explícito (algunos navegadores no respetan autoplay)
+      try {
+        await video.play();
+        log('▶️ video.play() OK', '#4ade80');
+      } catch (playErr) {
+        log('⚠️ video.play() falló: ' + playErr.message, '#f59e0b');
+        // Reintentar después de un delay
+        setTimeout(async () => {
+          try { await video.play(); log('▶️ play() retry OK', '#4ade80'); } catch (e) {}
+        }, 500);
+      }
+
+      // Esperar a que el video tenga dimensiones
+      await new Promise((resolve) => {
+        if (video.videoWidth > 0) return resolve();
+        const check = setInterval(() => {
+          if (video.videoWidth > 0) {
+            clearInterval(check);
+            log(`📐 Video listo: ${video.videoWidth}x${video.videoHeight}`, '#4ade80');
+            resolve();
+          }
+        }, 100);
+        setTimeout(() => { clearInterval(check); resolve(); }, 3000);
+      });
+
+      ocultarErrorCamara();
       if (img) img.hidden = true;
       if (scanFrame) scanFrame.classList.add('activo');
       if (cameraHint) cameraHint.style.opacity = '1';
@@ -147,20 +249,22 @@
       flashSoportado = !!caps.torch;
       if (flashSoportado && btnFlash) btnFlash.classList.add('activo');
 
+      iniciarDebugVideo();
       iniciarEscaneoContinuo();
     } catch (err) {
-      let msg = 'No se pudo acceder a la cámara.';
-      if (err.name === 'NotAllowedError') msg = 'Permiso denegado. Habilitá la cámara en el navegador.';
-      else if (err.name === 'NotFoundError') msg = 'No hay cámara disponible. Probá desde el celular.';
-      else if (err.name === 'NotReadableError') msg = 'La cámara está en uso por otra app.';
-      mostrarErrorCamara(msg);
-      setStatus('Error cámara', 'error');
+      log('❌ Error al asignar video: ' + err.message, '#ef4444');
+      mostrarErrorCamara('Error al mostrar el video.');
+      setStatus('Error', 'error');
     }
   }
 
   function detenerCamara() {
+    if (debugInterval) { clearInterval(debugInterval); debugInterval = null; }
     if (stopScan) { stopScan(); stopScan = null; }
-    if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+    if (stream) {
+      stream.getTracks().forEach(t => t.stop());
+      stream = null;
+    }
     trackActual = null;
     flashEncendido = false;
     if (btnFlash) btnFlash.classList.remove('encendido', 'activo');
@@ -198,8 +302,10 @@
 
     if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
     trackActual = null;
+    if (debugInterval) { clearInterval(debugInterval); debugInterval = null; }
 
     const datos = DNIParser.parsear(texto);
+    log('🧩 Datos: ' + JSON.stringify(datos).substring(0, 100), '#4ade80');
 
     if (!datos || (!datos.dni && !datos.apellido && !datos.nombre)) {
       if (estado) { estado.textContent = '⚠️ No se extrajeron datos'; estado.classList.add('error'); }
@@ -276,28 +382,23 @@
   // ==========================================
   function datosComoTexto(d) {
     if (!d) return '';
-    const lineas = [
-      'DATOS DEL DNI',
-      '================',
+    return [
+      'DATOS DEL DNI', '================',
       `DNI: ${d.dni || '—'}`,
       `Nombre: ${d.nombreCompleto || '—'}`,
-      `Apellido: ${d.apellido || '—'}`,
-      `Nombre/s: ${d.nombre || '—'}`,
       `Sexo: ${d.sexo || '—'}`,
       `Fecha nacimiento: ${d.fechaNacimiento || '—'}`,
       `Edad: ${d.edad != null ? d.edad + ' años' : '—'}`,
       `Nacionalidad: ${d.nacionalidad || '—'}`,
-      `Tipo documento: ${d.tipoDocumento || '—'}`,
+      `Tipo: ${d.tipoDocumento || '—'}`,
       `Ejemplar: ${d.ejemplar || '—'}`,
       `Nro trámite: ${d.tramite || '—'}`,
       `CUIL: ${d.cuil || '—'}`,
       `Emisión: ${d.fechaEmision || '—'}`,
       `Vencimiento: ${d.fechaVencimiento || '—'}`,
-      `Estado: ${d.vigente === true ? 'Vigente' : d.vigente === false ? 'Vencido' : '—'}`,
       `País: ${d.pais || '—'}`,
-      `Método de lectura: ${d.metodo || '—'}`
-    ];
-    return lineas.join('\n');
+      `Método: ${d.metodo || '—'}`
+    ].join('\n');
   }
 
   async function copiarDatos() {
@@ -305,9 +406,8 @@
     const texto = datosComoTexto(ultimoResultado);
     try {
       await navigator.clipboard.writeText(texto);
-      mostrarToast('✓ Datos copiados al portapapeles', 'success');
+      mostrarToast('✓ Datos copiados', 'success');
     } catch (e) {
-      // Fallback
       const ta = document.createElement('textarea');
       ta.value = texto;
       ta.style.position = 'fixed';
@@ -338,6 +438,9 @@
   // ==========================================
   // HISTORIAL
   // ==========================================
+  const STORAGE_KEY = 'escaner_dni_historial';
+  const MAX_HISTORIAL = 50;
+
   function leerHistorial() {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
@@ -358,12 +461,7 @@
   function guardarEnHistorial() {
     if (!ultimoResultado) return;
     const arr = leerHistorial();
-    const item = {
-      id: Date.now(),
-      fecha: new Date().toISOString(),
-      datos: ultimoResultado
-    };
-    arr.unshift(item);
+    arr.unshift({ id: Date.now(), fecha: new Date().toISOString(), datos: ultimoResultado });
     if (arr.length > MAX_HISTORIAL) arr.length = MAX_HISTORIAL;
     escribirHistorial(arr);
     actualizarContadorHistorial();
@@ -374,7 +472,7 @@
     if (!historialLista) return;
     const arr = leerHistorial();
     if (arr.length === 0) {
-      historialLista.innerHTML = '<p class="empty-state">No hay escaneos guardados todavía</p>';
+      historialLista.innerHTML = '<p class="empty-state">No hay escaneos guardados</p>';
       return;
     }
     historialLista.innerHTML = arr.map(item => {
@@ -387,11 +485,11 @@
         <div class="historial-item" data-id="${item.id}">
           <div class="historial-info">
             <div class="historial-nombre">${d.nombreCompleto || 'Sin nombre'}</div>
-            <div class="historial-meta">DNI ${d.dni || '—'} · ${fecha} · ${d.metodo || '—'}</div>
+            <div class="historial-meta">DNI ${d.dni || '—'} · ${fecha}</div>
           </div>
           <div class="historial-actions">
-            <button class="historial-btn" data-action="ver" data-id="${item.id}" title="Ver">👁</button>
-            <button class="historial-btn delete" data-action="borrar" data-id="${item.id}" title="Borrar">✕</button>
+            <button class="historial-btn" data-action="ver" data-id="${item.id}">👁</button>
+            <button class="historial-btn delete" data-action="borrar" data-id="${item.id}">✕</button>
           </div>
         </div>
       `;
@@ -402,13 +500,9 @@
         const id = Number(btn.dataset.id);
         if (btn.dataset.action === 'ver') {
           const item = leerHistorial().find(x => x.id === id);
-          if (item) {
-            render(item.datos);
-            cerrarHistorial();
-          }
-        } else if (btn.dataset.action === 'borrar') {
-          const arr = leerHistorial().filter(x => x.id !== id);
-          escribirHistorial(arr);
+          if (item) { render(item.datos); cerrarHistorial(); }
+        } else {
+          escribirHistorial(leerHistorial().filter(x => x.id !== id));
           renderHistorial();
           actualizarContadorHistorial();
         }
@@ -416,14 +510,8 @@
     });
   }
 
-  function abrirHistorial() {
-    renderHistorial();
-    if (modalHistorial) modalHistorial.hidden = false;
-  }
-
-  function cerrarHistorial() {
-    if (modalHistorial) modalHistorial.hidden = true;
-  }
+  function abrirHistorial() { renderHistorial(); if (modalHistorial) modalHistorial.hidden = false; }
+  function cerrarHistorial() { if (modalHistorial) modalHistorial.hidden = true; }
 
   // ==========================================
   // SUBIR IMAGEN
@@ -432,18 +520,15 @@
     const reader = new FileReader();
     reader.onload = async (e) => {
       const src = e.target.result;
-
-      // Mostrar imagen en el visor
       const imageEl = new Image();
       imageEl.onload = async () => {
         if (img) { img.src = src; img.hidden = false; }
         if (video) video.hidden = true;
         if (scanFrame) scanFrame.classList.remove('activo');
         if (cameraHint) cameraHint.style.opacity = '0';
-
         detenerCamara();
         setStatus('Procesando imagen…');
-        if (escaneoEstado) escaneoEstado.textContent = '🔍 Analizando imagen…';
+        if (escaneoEstado) escaneoEstado.textContent = '🔍 Analizando…';
 
         const texto = await DNIScanner.escanearImagen(imageEl);
 
@@ -462,11 +547,7 @@
             return;
           }
         }
-
-        if (estado) {
-          estado.textContent = '⚠️ No se detectó código en la imagen';
-          estado.classList.add('error');
-        }
+        if (estado) { estado.textContent = '⚠️ No se detectó código'; estado.classList.add('error'); }
         if (escaneoEstado) escaneoEstado.textContent = 'Probá con una imagen más nítida';
         setStatus('Sin código', 'error');
         if (btnRepetir) btnRepetir.hidden = false;
@@ -488,10 +569,7 @@
       if (img) { img.hidden = true; img.src = ''; }
       if (video) video.hidden = false;
       btnRepetir.hidden = true;
-      if (estado) {
-        estado.textContent = 'Apuntá al código del DNI.';
-        estado.classList.remove('ok', 'error');
-      }
+      if (estado) { estado.textContent = 'Apuntá al código del DNI.'; estado.classList.remove('ok', 'error'); }
       if (escaneoEstado) escaneoEstado.textContent = '';
       await iniciarCamara();
     });
@@ -509,7 +587,6 @@
   }
 
   if (btnUpload) btnUpload.addEventListener('click', () => fileInput.click());
-
   if (fileInput) {
     fileInput.addEventListener('change', (e) => {
       const file = e.target.files[0];
@@ -542,33 +619,25 @@
   window.addEventListener('beforeunload', () => {
     if (stream) stream.getTracks().forEach(t => t.stop());
     if (stopScan) stopScan();
+    if (debugInterval) clearInterval(debugInterval);
   });
 
   // ==========================================
-  // PWA - SERVICE WORKER
+  // SERVICE WORKER
   // ==========================================
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
-      navigator.serviceWorker.register('sw.js')
-        .then(() => log('✅ SW registrado'))
-        .catch(err => log('⚠️ SW error: ' + err.message, '#f59e0b'));
+      navigator.serviceWorker.register('sw.js').catch(() => {});
     });
   }
 
   // ==========================================
-  // INICIALIZACIÓN
+  // INIT
   // ==========================================
-  crearPanelDebug();
-  log('=== main.js iniciando ===', '#fff');
-  log('Validators: ' + typeof Validators, typeof Validators === 'object' ? '#4ade80' : '#ef4444');
-  log('DNIParser: ' + typeof DNIParser, typeof DNIParser === 'object' ? '#4ade80' : '#ef4444');
-  log('DNIScanner: ' + typeof DNIScanner, typeof DNIScanner === 'object' ? '#4ade80' : '#ef4444');
-  log('jsQR: ' + typeof jsQR, typeof jsQR === 'function' ? '#4ade80' : '#f59e0b');
-  log('BarcodeDetector: ' + typeof BarcodeDetector, typeof BarcodeDetector === 'function' ? '#4ade80' : '#f59e0b');
-
+  crearPanelDebugVideo();
   actualizarContadorHistorial();
+  log('=== Iniciando ===', '#fff');
+  log('DNIScanner: ' + typeof DNIScanner, typeof DNIScanner === 'object' ? '#4ade80' : '#ef4444');
 
   setTimeout(iniciarCamara, 300);
-
-  log('=== main.js listo ===', '#fff');
 })();
