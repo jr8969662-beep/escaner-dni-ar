@@ -1,5 +1,5 @@
 /**
- * OCR con Tesseract.js para el anverso del DNI argentino
+ * OCR con Tesseract.js
  */
 
 const OCRReader = (() => {
@@ -13,7 +13,7 @@ const OCRReader = (() => {
       logger: m => { if (onProgress) onProgress(m); }
     });
     await worker.setParameters({
-      tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZÁÉÍÓÚÑabcdefghijklmnopqrstuvwxyz0123456789-/.,: ',
+      tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZÁÉÍÓÚÑabcdefghijklmnopqrstuvwxyz0123456789-/.,: <>',
       preserve_interword_spaces: '1'
     });
     workerReady = true;
@@ -36,3 +36,5 @@ const OCRReader = (() => {
 
   return { recognize, init, terminate, get ready() { return workerReady; } };
 })();
+
+console.log('✅ ocr.js cargado');
