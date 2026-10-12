@@ -1,6 +1,5 @@
 /**
- * Lector NFC para el chip del nuevo DNI electrónico
- * Solo funciona en navegadores Android compatibles (Web NFC API)
+ * Lector NFC para el chip del DNI electrónico (Android Chrome)
  */
 
 const NFCReader = (() => {
@@ -9,14 +8,9 @@ const NFCReader = (() => {
     return 'NDEFReader' in window;
   }
 
-  /**
-   * Escucha un tag NFC y devuelve los registros leídos
-   * @param {number} timeoutMs - Timeout en ms
-   * @returns {Promise<Object>}
-   */
   async function read(timeoutMs = 30000) {
     if (!isSupported()) {
-      throw new Error('Web NFC no está soportado en este navegador. Se requiere Android con Chrome.');
+      throw new Error('Web NFC no está soportado en este navegador.');
     }
 
     const ndef = new NDEFReader();
@@ -31,31 +25,18 @@ const NFCReader = (() => {
         clearTimeout(timeout);
         const decoder = new TextDecoder();
         const registros = [];
-
         for (const record of event.message.records) {
           try {
             let valor = null;
-            if (record.recordType === 'text') {
-              valor = decoder.decode(record.data);
-            } else if (record.recordType === 'url') {
+            if (record.recordType === 'text' || record.recordType === 'url') {
               valor = decoder.decode(record.data);
             } else {
               valor = Array.from(new Uint8Array(record.data)).join(' ');
             }
-            registros.push({
-              tipo: record.recordType,
-              mediaType: record.mediaType,
-              valor
-            });
-          } catch (e) {
-            console.warn('Error leyendo registro NFC:', e);
-          }
+            registros.push({ tipo: record.recordType, valor });
+          } catch (e) {}
         }
-
-        resolve({
-          serialNumber: event.serialNumber,
-          registros
-        });
+        resolve({ serialNumber: event.serialNumber, registros });
       };
 
       ndef.onreadingerror = () => {
