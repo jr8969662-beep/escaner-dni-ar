@@ -5,34 +5,52 @@
   <title>Test Parser MRZ</title>
   <style>
     body { font-family: monospace; background: #0f172a; color: #e2e8f0; padding: 20px; }
-    textarea { width: 100%; height: 120px; background: #1e293b; color: #e2e8f0; border: 1px solid #475569; border-radius: 8px; padding: 10px; font-family: monospace; font-size: 14px; }
-    button { background: #38bdf8; color: #0f172a; border: none; padding: 12px 24px; border-radius: 8px; font-weight: 700; cursor: pointer; margin-top: 10px; }
+    textarea { width: 100%; height: 140px; background: #1e293b; color: #e2e8f0; border: 1px solid #475569; border-radius: 8px; padding: 10px; font-family: monospace; font-size: 14px; }
+    button { background: #38bdf8; color: #0f172a; border: none; padding: 12px 24px; border-radius: 8px; font-weight: 700; cursor: pointer; margin-top: 10px; margin-right: 8px; }
     pre { background: #0b1220; padding: 16px; border-radius: 8px; overflow: auto; font-size: 13px; }
     h1 { color: #38bdf8; }
     .ok { color: #22c55e; }
     .bad { color: #ef4444; }
+    .info { color: #38bdf8; }
   </style>
 </head>
 <body>
-  <h1>🧪 Test del Parser MRZ</h1>
-  <p>Pegá el texto crudo que ves en "Ver texto crudo":</p>
-  <textarea id="input" placeholder="Pegá acá el texto crudo del OCR..."></textarea>
-  <button onclick="probar()">Probar parser</button>
+  <h1>🧪 Test del Parser</h1>
+  <p>Pegá el texto crudo que ves en "Ver texto crudo" (o el MRZ de ejemplo):</p>
+  <textarea id="input" placeholder="Pegá acá el texto crudo...">IDARG25122169&lt;0&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;
+7602263M4104216ARG&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;4
+SANCHEZ&lt;&lt;RAMIRO&lt;ERNESTO&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;</textarea>
+  <button onclick="probar()">▶ Probar parser</button>
+  <button onclick="cargarEjemplo()">📋 Cargar ejemplo</button>
   <h2>Resultado:</h2>
   <pre id="out">—</pre>
 
   <script src="js/validators.js"></script>
   <script src="js/parser.js"></script>
   <script>
+    function cargarEjemplo() {
+      document.getElementById('input').value =
+        'IDARG25122169<0<<<<<<<<<<<<<<<<<\n' +
+        '7602263M4104216ARG<<<<<<<<<<<<<4\n' +
+        'SANCHEZ<<RAMIRO<ERNESTO<<<<<<<<<<';
+    }
     function probar() {
       const texto = document.getElementById('input').value;
       const out = document.getElementById('out');
+      if (!texto.trim()) {
+        out.innerHTML = '<span class="bad">✗ Pegá algún texto primero.</span>';
+        return;
+      }
       try {
+        console.log('=== Probando parser ===');
+        console.log('Entrada:', texto);
         const data = DNIParser.parsearUniversal(texto);
-        out.innerHTML = '<span class="ok">✓ Parseado con método: ' + (data?.metodo || 'desconocido') + '</span>\n\n' +
+        console.log('Salida:', data);
+        out.innerHTML = '<span class="ok">✓ Parseado (método: ' + (data?.metodo || '?') + ')</span>\n\n' +
                         JSON.stringify(data, null, 2);
       } catch (e) {
         out.innerHTML = '<span class="bad">✗ Error: ' + e.message + '</span>\n\n' + e.stack;
+        console.error(e);
       }
     }
   </script>
