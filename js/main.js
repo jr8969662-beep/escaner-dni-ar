@@ -2,46 +2,19 @@
   'use strict';
 
   // ==========================================
+  // CONFIG
+  // ==========================================
+  const DEBUG = false;
+  const STORAGE_KEY = 'escaner_dni_historial';
+  const MAX_HISTORIAL = 50;
+  const PAIS_KEY = 'pais_escaner';
+
+  // ==========================================
   // DEBUG
   // ==========================================
-  const DEBUG = false; // ← después lo ponés en false
-
   function log(msg, color = '#4ade80') {
     if (!DEBUG) return;
     console.log(msg);
-    const debugLog = document.getElementById('video-debug');
-    if (!debugLog) return;
-    const line = document.createElement('div');
-    line.style.color = color;
-    line.textContent = msg;
-    debugLog.appendChild(line);
-    debugLog.scrollTop = debugLog.scrollHeight;
-  }
-
-  function crearPanelDebugVideo() {
-    if (!DEBUG) return;
-    const vp = document.querySelector('.camera-viewport');
-    if (!vp || document.getElementById('video-debug-overlay')) return;
-
-    const overlay = document.createElement('div');
-    overlay.id = 'video-debug-overlay';
-    overlay.style.cssText = `
-      position: absolute;
-      top: 8px; left: 8px; right: 8px;
-      max-height: 45%;
-      overflow-y: auto;
-      background: rgba(0,0,0,0.85);
-      color: #4ade80;
-      font-family: monospace;
-      font-size: 10px;
-      padding: 6px 8px;
-      border-radius: 8px;
-      z-index: 9999;
-      line-height: 1.35;
-      border: 1px solid #4ade80;
-    `;
-    overlay.innerHTML = '<div style="color:#fff;font-weight:bold;margin-bottom:3px;">📹 Diagnóstico de cámara</div><div id="video-debug"></div>';
-    vp.appendChild(overlay);
   }
 
   // ==========================================
@@ -64,6 +37,8 @@
   const fileInput = document.getElementById('file-input');
   const resultado = document.getElementById('resultado');
   const badgeMetodo = document.getElementById('badge-metodo');
+  const resultPais = document.getElementById('result-pais');
+  const labelNumero = document.getElementById('label-numero');
   const statusPill = document.getElementById('status-pill');
   const statusText = document.getElementById('status-text');
   const btnCopiar = document.getElementById('btn-copiar');
@@ -83,7 +58,7 @@
   let flashSoportado = false;
   let stopScan = null;
   let ultimoResultado = null;
-  let debugInterval = null;
+  let paisSeleccionado = localStorage.getItem(PAIS_KEY) || 'arg';
 
   // ==========================================
   // HELPERS
@@ -121,41 +96,10 @@
   }
 
   // ==========================================
-  // DEBUG EN VIVO
-  // ==========================================
-  function iniciarDebugVideo() {
-    if (!DEBUG) return;
-    if (debugInterval) clearInterval(debugInterval);
-    debugInterval = setInterval(() => {
-      if (!video) return;
-      const info = [
-        `videoWidth: ${video.videoWidth}`,
-        `videoHeight: ${video.videoHeight}`,
-        `readyState: ${video.readyState}/4`,
-        `paused: ${video.paused}`,
-        `hidden: ${video.hidden}`,
-        `display: ${getComputedStyle(video).display}`,
-        `stream: ${stream ? 'activo' : 'null'}`,
-        `tracks: ${stream ? stream.getVideoTracks().length : 0}`
-      ];
-      const debugLog = document.getElementById('video-debug');
-      if (debugLog) {
-        debugLog.innerHTML = info.map(line => {
-          const color = line.includes('null') || line.includes('0') || line.includes('true') || line.includes(': 0') ? '#ef4444' : '#4ade80';
-          return `<div style="color:${color}">${line}</div>`;
-        }).join('');
-      }
-    }, 500);
-  }
-
-  // ==========================================
-  // CÁMARA - VERSIÓN ROBUSTA
+  // CÁMARA
   // ==========================================
   async function iniciarCamara() {
-    if (stream) {
-      log('ℹ️ Ya hay stream activo');
-      return;
-    }
+    if (stream) return;
 
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       mostrarErrorCamara('Este navegador no permite acceder a la cámara.');
@@ -163,7 +107,6 @@
       return;
     }
 
-    // Intentar varias configuraciones, de más específica a más genérica
     const configuraciones = [
       { video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false },
       { video: { facingMode: 'environment' }, audio: false },
@@ -175,15 +118,14 @@
 
     for (let i = 0; i < configuraciones.length; i++) {
       try {
-        log(`🎥 Intento ${i + 1}/${configuraciones.length}…`, '#f59e0b');
+        log(`🎥 Intento ${i + 1}/${configuraciones.length}…`);
         setStatus('Iniciando cámara…');
-
         stream = await navigator.mediaDevices.getUserMedia(configuraciones[i]);
-        log(`✅ Stream OK con config ${i + 1}`, '#4ade80');
+        log(`✅ Stream OK con config ${i + 1}`);
         break;
       } catch (err) {
         ultimoError = err;
-        log(`❌ Config ${i + 1} falló: ${err.name}`, '#f59e0b');
+        log(`❌ Config ${i + 1} falló: ${err.name}`);
         stream = null;
       }
     }
@@ -197,11 +139,9 @@
       }
       mostrarErrorCamara(msg);
       setStatus('Error cámara', 'error');
-      log('❌ Ninguna configuración funcionó', '#ef4444');
       return;
     }
 
-    // ====== ASIGNAR AL VIDEO ======
     try {
       video.srcObject = stream;
       video.hidden = false;
@@ -210,25 +150,21 @@
       video.setAttribute('muted', '');
       video.muted = true;
 
-      // Forzar play explícito (algunos navegadores no respetan autoplay)
       try {
         await video.play();
-        log('▶️ video.play() OK', '#4ade80');
+        log('▶️ video.play() OK');
       } catch (playErr) {
-        log('⚠️ video.play() falló: ' + playErr.message, '#f59e0b');
-        // Reintentar después de un delay
         setTimeout(async () => {
-          try { await video.play(); log('▶️ play() retry OK', '#4ade80'); } catch (e) {}
+          try { await video.play(); } catch (e) {}
         }, 500);
       }
 
-      // Esperar a que el video tenga dimensiones
       await new Promise((resolve) => {
         if (video.videoWidth > 0) return resolve();
         const check = setInterval(() => {
           if (video.videoWidth > 0) {
             clearInterval(check);
-            log(`📐 Video listo: ${video.videoWidth}x${video.videoHeight}`, '#4ade80');
+            log(`📐 Video: ${video.videoWidth}x${video.videoHeight}`);
             resolve();
           }
         }, 100);
@@ -241,7 +177,7 @@
       if (cameraHint) cameraHint.style.opacity = '1';
       if (btnCamara) btnCamara.hidden = true;
       if (btnRepetir) btnRepetir.hidden = true;
-      if (estado) estado.textContent = 'Apuntá al código del DNI.';
+      if (estado) estado.textContent = 'Apuntá al código del documento.';
       setStatus('Cámara activa', 'active');
 
       trackActual = stream.getVideoTracks()[0];
@@ -249,17 +185,15 @@
       flashSoportado = !!caps.torch;
       if (flashSoportado && btnFlash) btnFlash.classList.add('activo');
 
-      iniciarDebugVideo();
       iniciarEscaneoContinuo();
     } catch (err) {
-      log('❌ Error al asignar video: ' + err.message, '#ef4444');
+      log('❌ Error asignando video: ' + err.message);
       mostrarErrorCamara('Error al mostrar el video.');
       setStatus('Error', 'error');
     }
   }
 
   function detenerCamara() {
-    if (debugInterval) { clearInterval(debugInterval); debugInterval = null; }
     if (stopScan) { stopScan(); stopScan = null; }
     if (stream) {
       stream.getTracks().forEach(t => t.stop());
@@ -302,13 +236,16 @@
 
     if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
     trackActual = null;
-    if (debugInterval) { clearInterval(debugInterval); debugInterval = null; }
 
-    const datos = DNIParser.parsear(texto);
-    log('🧩 Datos: ' + JSON.stringify(datos).substring(0, 100), '#4ade80');
+    // 🔑 Elegir parser según país
+    const datos = paisSeleccionado === 'arg'
+      ? DNIParser.parsear(texto)
+      : ParsersMundo.parsear(paisSeleccionado, texto);
 
-    if (!datos || (!datos.dni && !datos.apellido && !datos.nombre)) {
-      if (estado) { estado.textContent = '⚠️ No se extrajeron datos'; estado.classList.add('error'); }
+    log('🧩 Datos: ' + JSON.stringify(datos).substring(0, 120));
+
+    if (!datos || (!datos.dni && !datos.numero && !datos.apellido && !datos.nombre)) {
+      if (estado) { estado.textContent = '⚠️ No se pudieron extraer datos'; estado.classList.add('error'); }
       if (escaneoEstado) escaneoEstado.textContent = 'Texto: ' + texto.substring(0, 60);
       setStatus('Sin datos', 'error');
       if (btnRepetir) btnRepetir.hidden = false;
@@ -317,7 +254,7 @@
 
     render(datos);
     if (estado) {
-      estado.textContent = '✓ ' + (datos.nombreCompleto || datos.dni);
+      estado.textContent = '✓ ' + (datos.nombreCompleto || datos.dni || datos.numero || 'Documento');
       estado.classList.remove('error');
       estado.classList.add('ok');
     }
@@ -346,9 +283,18 @@
 
   function render(d) {
     ultimoResultado = d;
+
+    // Ajustes según país
+    const esChile = d.pais === 'CHL';
+    if (labelNumero) labelNumero.textContent = esChile ? 'RUN' : 'Número de DNI';
+    if (resultPais) resultPais.textContent = d.paisNombre
+      ? `Datos extraídos · ${d.paisNombre}`
+      : 'Datos extraídos del documento';
+
     if (badgeMetodo) badgeMetodo.textContent = (d.metodo || 'código').toUpperCase();
 
-    setTexto('r-dni', d.dni);
+    // Número principal (DNI argentino o RUN chileno)
+    setTexto('r-dni', d.dni || d.numero || null);
     setTexto('r-apellido', d.apellido);
     setTexto('r-nombre', d.nombre);
     setTexto('r-nombreCompleto', d.nombreCompleto);
@@ -364,9 +310,14 @@
     setTexto('r-emision', d.fechaEmision);
     setTexto('r-vencimiento', d.fechaVencimiento);
     setBool('r-vigente', d.vigente, '✅ Vigente', '❌ Vencido');
-    setTexto('r-pais', d.pais);
+    setTexto('r-pais', d.pais || '—');
     setTexto('r-domicilio', d.domicilio);
-    setBool('r-val-dni', d.dni ? /^\d{7,8}$/.test(d.dni) : null, '✅ Válido', '❌ Inválido');
+
+    // Validaciones
+    const numValido = d.numeroValido != null
+      ? d.numeroValido
+      : (d.dni ? /^\d{7,8}$/.test(d.dni) : null);
+    setBool('r-val-dni', numValido, '✅ Válido', '❌ Inválido');
     setBool('r-val-cuil', d.cuil ? Validators.validarCUIL(d.cuil) : null, '✅ Válido', '❌ Inválido');
     setTexto('r-val-mrz', d.metodo === 'mrz' ? 'Sin verificar' : '—');
     setTexto('r-raw', d.raw);
@@ -383,20 +334,20 @@
   function datosComoTexto(d) {
     if (!d) return '';
     return [
-      'DATOS DEL DNI', '================',
-      `DNI: ${d.dni || '—'}`,
+      'DATOS DEL DOCUMENTO', '================',
+      `País: ${d.paisNombre || d.pais || '—'}`,
+      `Tipo: ${d.tipoDocumento || '—'}`,
+      `Número: ${d.dni || d.numero || '—'}`,
       `Nombre: ${d.nombreCompleto || '—'}`,
       `Sexo: ${d.sexo || '—'}`,
-      `Fecha nacimiento: ${d.fechaNacimiento || '—'}`,
+      `Nacimiento: ${d.fechaNacimiento || '—'}`,
       `Edad: ${d.edad != null ? d.edad + ' años' : '—'}`,
       `Nacionalidad: ${d.nacionalidad || '—'}`,
-      `Tipo: ${d.tipoDocumento || '—'}`,
       `Ejemplar: ${d.ejemplar || '—'}`,
-      `Nro trámite: ${d.tramite || '—'}`,
+      `Trámite: ${d.tramite || '—'}`,
       `CUIL: ${d.cuil || '—'}`,
       `Emisión: ${d.fechaEmision || '—'}`,
       `Vencimiento: ${d.fechaVencimiento || '—'}`,
-      `País: ${d.pais || '—'}`,
       `Método: ${d.metodo || '—'}`
     ].join('\n');
   }
@@ -427,7 +378,8 @@
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `dni-${ultimoResultado.dni || 'escaneo'}-${Date.now()}.json`;
+    const num = ultimoResultado.dni || ultimoResultado.numero || 'escaneo';
+    a.download = `doc-${num}-${Date.now()}.json`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -438,9 +390,6 @@
   // ==========================================
   // HISTORIAL
   // ==========================================
-  const STORAGE_KEY = 'escaner_dni_historial';
-  const MAX_HISTORIAL = 50;
-
   function leerHistorial() {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
@@ -481,11 +430,12 @@
         day: '2-digit', month: '2-digit', year: 'numeric',
         hour: '2-digit', minute: '2-digit'
       });
+      const num = d.dni || d.numero || '—';
       return `
         <div class="historial-item" data-id="${item.id}">
           <div class="historial-info">
             <div class="historial-nombre">${d.nombreCompleto || 'Sin nombre'}</div>
-            <div class="historial-meta">DNI ${d.dni || '—'} · ${fecha}</div>
+            <div class="historial-meta">${num} · ${d.paisNombre || ''} · ${fecha}</div>
           </div>
           <div class="historial-actions">
             <button class="historial-btn" data-action="ver" data-id="${item.id}">👁</button>
@@ -533,11 +483,14 @@
         const texto = await DNIScanner.escanearImagen(imageEl);
 
         if (texto) {
-          const datos = DNIParser.parsear(texto);
-          if (datos && (datos.dni || datos.apellido || datos.nombre)) {
+          const datos = paisSeleccionado === 'arg'
+            ? DNIParser.parsear(texto)
+            : ParsersMundo.parsear(paisSeleccionado, texto);
+
+          if (datos && (datos.dni || datos.numero || datos.apellido || datos.nombre)) {
             render(datos);
             if (estado) {
-              estado.textContent = '✓ ' + (datos.nombreCompleto || datos.dni);
+              estado.textContent = '✓ ' + (datos.nombreCompleto || datos.dni || datos.numero);
               estado.classList.remove('error');
               estado.classList.add('ok');
             }
@@ -558,6 +511,41 @@
   }
 
   // ==========================================
+  // SELECTOR DE PAÍS
+  // ==========================================
+  function inicializarSelectorPais() {
+    const chips = document.querySelectorAll('.country-chip[data-country]');
+    if (!chips.length) return;
+
+    // Marcar activo el guardado
+    chips.forEach(chip => {
+      chip.classList.toggle('active', chip.dataset.country === paisSeleccionado);
+    });
+
+    chips.forEach(chip => {
+      chip.addEventListener('click', () => {
+        if (chip.disabled) return;
+        paisSeleccionado = chip.dataset.country;
+        localStorage.setItem(PAIS_KEY, paisSeleccionado);
+        chips.forEach(c => c.classList.toggle('active', c === chip));
+
+        const nombrePais = chip.querySelector('span:not(.flag):not(.soon)')?.textContent || '';
+        mostrarToast(`País seleccionado: ${nombrePais}`, 'success');
+
+        if (resultado) resultado.hidden = true;
+
+        // Reiniciar la cámara si no está activa
+        if (!stream && !img.hidden && img.src) {
+          img.hidden = true;
+          img.src = '';
+          video.hidden = false;
+          iniciarCamara();
+        }
+      });
+    });
+  }
+
+  // ==========================================
   // EVENTOS
   // ==========================================
   if (btnCamara) btnCamara.addEventListener('click', iniciarCamara);
@@ -569,7 +557,7 @@
       if (img) { img.hidden = true; img.src = ''; }
       if (video) video.hidden = false;
       btnRepetir.hidden = true;
-      if (estado) { estado.textContent = 'Apuntá al código del DNI.'; estado.classList.remove('ok', 'error'); }
+      if (estado) { estado.textContent = 'Apuntá al código del documento.'; estado.classList.remove('ok', 'error'); }
       if (escaneoEstado) escaneoEstado.textContent = '';
       await iniciarCamara();
     });
@@ -619,7 +607,6 @@
   window.addEventListener('beforeunload', () => {
     if (stream) stream.getTracks().forEach(t => t.stop());
     if (stopScan) stopScan();
-    if (debugInterval) clearInterval(debugInterval);
   });
 
   // ==========================================
@@ -634,10 +621,12 @@
   // ==========================================
   // INIT
   // ==========================================
-  crearPanelDebugVideo();
   actualizarContadorHistorial();
-  log('=== Iniciando ===', '#fff');
-  log('DNIScanner: ' + typeof DNIScanner, typeof DNIScanner === 'object' ? '#4ade80' : '#ef4444');
+  inicializarSelectorPais();
+  log('=== Iniciando ===');
+  log('DNIScanner: ' + typeof DNIScanner);
+  log('ParsersMundo: ' + typeof ParsersMundo);
+  log('País seleccionado: ' + paisSeleccionado);
 
   setTimeout(iniciarCamara, 300);
 })();
