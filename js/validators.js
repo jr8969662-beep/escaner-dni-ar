@@ -41,14 +41,11 @@ const Validators = (() => {
     if (!fecha) return false;
     const m = String(fecha).match(/^(\d{1,4})[\/\-](\d{1,2})[\/\-](\d{1,4})$/);
     if (!m) return false;
-
     let dia, mes, anio;
     if (m[1].length === 4) { anio = +m[1]; mes = +m[2]; dia = +m[3]; }
     else { dia = +m[1]; mes = +m[2]; anio = +m[3]; if (anio < 100) anio += anio > 30 ? 1900 : 2000; }
-
     if (mes < 1 || mes > 12) return false;
     if (dia < 1 || dia > 31) return false;
-
     const d = new Date(anio, mes - 1, dia);
     return d.getFullYear() === anio && d.getMonth() === mes - 1 && d.getDate() === dia;
   }
@@ -76,3 +73,5 @@ const Validators = (() => {
 
   return { validarDNI, validarCUIL, validarFecha, normalizarFecha, calcularEdad };
 })();
+
+console.log('✅ validators.js cargado');
