@@ -4,17 +4,16 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Escáner DNI Argentino</title>
-  <meta name="description" content="Escáner automático de DNI argentino. Detecta PDF417, QR u OCR.">
+  <meta name="description" content="Escáner automático de DNI argentino.">
   <link rel="stylesheet" href="css/styles.css">
 </head>
 <body>
   <div class="container">
     <header>
       <h1>🇦🇷 Escáner DNI Argentino</h1>
-      <p class="subtitle">Detección automática · PDF417 · QR · OCR</p>
+      <p class="subtitle">Detección automática · PDF417 · QR · MRZ · OCR</p>
     </header>
 
-    <!-- Zona de cámara -->
     <div class="video-wrap">
       <video id="video" autoplay playsinline muted></video>
       <img id="preview" class="preview" alt="Captura">
@@ -24,12 +23,10 @@
       </div>
     </div>
 
-    <!-- Barra de progreso del escaneo -->
     <div id="progressBar" class="progress-bar" style="display:none">
       <div class="progress-fill" id="progressFill"></div>
     </div>
 
-    <!-- Controles minimalistas -->
     <div class="controls">
       <button id="btnScan" class="primary big">📷 Escanear DNI</button>
       <button id="btnUpload" class="secondary">📁 Subir imagen</button>
@@ -37,14 +34,12 @@
       <input type="file" id="fileInput" accept="image/*" hidden>
     </div>
 
-    <!-- Estado -->
     <div id="loader" class="loader" style="display:none">
       <span class="spinner"></span>
       <span id="loaderText">Procesando…</span>
     </div>
     <div id="error" class="error" role="alert"></div>
 
-    <!-- Resultado -->
     <section id="result" class="result">
       <div class="result-header">
         <h2>Datos detectados</h2>
@@ -69,7 +64,6 @@
       </details>
     </section>
 
-    <!-- Tips -->
     <details class="tips">
       <summary>💡 Consejos para un buen escaneo</summary>
       <ul>
@@ -77,7 +71,7 @@
         <li>💡 Buscá luz natural, evitá el flash directo</li>
         <li>🎯 Apoyá el DNI sobre una superficie oscura y plana</li>
         <li>📐 Mantené el DNI paralelo a la cámara</li>
-        <li>⏱ Esperá 1-2 segundos al autofoco</li>
+        <li>📄 Frente: PDF417 (código alargado) · Dorso: MRZ (3 líneas con &lt;&lt;&lt;)</li>
       </ul>
     </details>
 
@@ -86,11 +80,8 @@
     </footer>
   </div>
 
-  <!-- Librerías externas -->
   <script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.0/umd/index.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
-
-  <!-- Módulos propios -->
   <script src="js/validators.js"></script>
   <script src="js/parser.js"></script>
   <script src="js/scanner.js"></script>
