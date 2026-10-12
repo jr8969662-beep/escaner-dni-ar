@@ -1,11 +1,11 @@
 /**
- * Flujo principal: UN botón, detección automática
- * - Frente: busca PDF417 + QR
- * - Dorso: lee MRZ + QR
+ * Flujo principal
  */
 
 (() => {
   'use strict';
+
+  console.log('🚀 main.js iniciando...');
 
   const video = document.getElementById('video');
   const preview = document.getElementById('preview');
@@ -78,12 +78,12 @@
 
     try {
       await ensureCamera();
-      overlayLabel.textContent = 'Apuntá al código de barras o al MRZ';
+      overlayLabel.textContent = 'Apuntá al PDF417 (frente) o MRZ (dorso)';
 
       window.__onQRSolo = () => {
         if (!qrAvisado) {
           qrAvisado = true;
-          overlayLabel.textContent = '⚠️ QR detectado (solo verificación). Apuntá al código alargado o a las 3 líneas MRZ';
+          overlayLabel.textContent = '⚠️ QR detectado. Apuntá al código alargado o al MRZ';
         }
       };
 
@@ -91,7 +91,6 @@
       const inicio = Date.now();
       setProgress(0);
 
-      // ---- FASE 1: escaneo de códigos de barras (15s) ----
       const codigo = await new Promise((resolve) => {
         stopScanFn = BarcodeReader.scanFromVideo(
           video,
@@ -111,7 +110,6 @@
       setProgress(null);
       if (!escaneando) return;
 
-      // ---- FASE 2: si hay código útil, usarlo ----
       if (codigo && !codigo.esVerificacion) {
         overlayLabel.textContent = '¡Código detectado!';
         const data = DNIParser.parsearUniversal(codigo.texto);
@@ -123,7 +121,7 @@
         }
       }
 
-      // ---- FASE 3: OCR (busca MRZ en el dorso o texto en el frente) ----
+      // Fallback OCR
       overlayLabel.textContent = 'Analizando imagen con OCR…';
       showLoader('Ejecutando OCR (puede tardar)…');
 
@@ -135,18 +133,26 @@
       });
       hideLoader();
 
+      console.log('=== Texto OCR ===');
+      console.log(ocrText);
+
       const data = DNIParser.parsearUniversal(ocrText);
+      console.log('=== Datos parseados ===');
+      console.log(data);
+
       if (data && (data.dni || data.apellido)) {
         render(data);
       } else if (data && data.esVerificacion) {
-        setError('Solo se detectó el QR de verificación. Apuntá al código alargado (PDF417) del frente o a las 3 líneas MRZ del dorso.');
+        setError('Solo se detectó el QR de verificación. Apuntá al PDF417 o MRZ.');
       } else {
-        setError('No se pudieron extraer datos. Probá con mejor luz y enfocá el código de barras o las 3 líneas MRZ.');
+        setError('No se pudieron extraer datos. Revisá "Ver texto crudo" más abajo.');
+        if (data) render(data);
       }
 
       finalizarEscaneo();
 
     } catch (e) {
+      console.error(e);
       hideLoader();
       setProgress(null);
       setError('Error: ' + e.message);
@@ -176,13 +182,8 @@
 
   function render(data) {
     if (!data) return;
-    if (data.esVerificacion) {
-      setError('Este código solo contiene un link de verificación. Apuntá al PDF417 o a la MRZ.');
-      return;
-    }
 
     overlayLabel.textContent = 'Escaneo completado';
-    setError('');
 
     document.getElementById('rDni').textContent = data.dni || '—';
     document.getElementById('rApellido').textContent = data.apellido || '—';
@@ -232,7 +233,6 @@
 
       showLoader('Analizando imagen…');
       try {
-        // 1) Intentar código de barras
         let codigo = await BarcodeReader.decode(src);
         if (!codigo || codigo.esVerificacion) {
           const escalado = await escalarImagen(src, 2);
@@ -241,16 +241,15 @@
         }
 
         if (codigo && !codigo.esVerificacion) {
-          hideLoader();
           const data = DNIParser.parsearUniversal(codigo.texto);
           if (data && (data.dni || data.apellido)) {
+            hideLoader();
             data.metodo = codigo.formato;
             render(data);
             return;
           }
         }
 
-        // 2) OCR
         loaderText.textContent = 'Ejecutando OCR…';
         const ocrText = await OCRReader.recognize(src, (m) => {
           if (m.status === 'recognizing text') {
@@ -259,11 +258,16 @@
         });
         hideLoader();
 
+        console.log('=== Texto OCR (upload) ===');
+        console.log(ocrText);
+
         const data = DNIParser.parsearUniversal(ocrText);
         if (data && (data.dni || data.apellido)) render(data);
-        else setError('No se pudieron extraer datos. Probá con una foto más nítida.');
+        else if (data) render(data);
+        else setError('No se pudieron extraer datos.');
 
       } catch (err) {
+        console.error(err);
         hideLoader();
         setError('Error: ' + err.message);
       } finally {
@@ -306,6 +310,16 @@
     stopCamera();
     if (stopScanFn) stopScanFn();
     OCRReader.terminate();
+  });
+
+  console.log('✅ main.js listo');
+  console.log('Objetos cargados:', {
+    Validators: typeof Validators,
+    DNIParser: typeof DNIParser,
+    BarcodeReader: typeof BarcodeReader,
+    OCRReader: typeof OCRReader,
+    ZXing: typeof ZXing,
+    Tesseract: typeof Tesseract
   });
 
 })();
