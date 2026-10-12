@@ -1,6 +1,6 @@
 /**
- * Lector universal de códigos (PDF417, QR, Code128, Code39, DataMatrix, Aztec)
- * Usa ZXing para máxima compatibilidad
+ * Lector de códigos (PDF417, QR, Code128, etc) con ZXing
+ * Expone el objeto BarcodeReader (NO PDF417Reader)
  */
 
 const BarcodeReader = (() => {
@@ -11,46 +11,44 @@ const BarcodeReader = (() => {
     const h = new Map();
     h.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
       ZXing.BarcodeFormat.PDF_417,
-      ZXing.BarcodeFormat.QR_CODE,
+      ZXing.BarcodeFormat.CODE_128,
+      ZXing.BarcodeFormat.CODE_39,
       ZXing.BarcodeFormat.DATA_MATRIX,
       ZXing.BarcodeFormat.AZTEC,
-      ZXing.BarcodeFormat.CODE_128,
-      ZXing.BarcodeFormat.CODE_39
+      ZXing.BarcodeFormat.QR_CODE
     ]);
     h.set(ZXing.DecodeHintType.TRY_HARDER, true);
+    h.set(ZXing.DecodeHintType.ALSO_INVERTED, true);
     return h;
   }
 
   function init() {
     if (reader) return reader;
     reader = new ZXing.BrowserMultiFormatReader(buildHints(), {
-      delayBetweenScanAttempts: 150,
+      delayBetweenScanAttempts: 60,
       delayBetweenScanSuccess: 500
     });
     return reader;
   }
 
-  /**
-   * Decodifica desde una imagen estática
-   */
   async function decode(imageSource) {
     const r = init();
     try {
       const result = await r.decodeFromImageUrl(imageSource);
-      return result ? { texto: result.getText(), formato: formatName(result.getBarcodeFormat()) } : null;
+      if (!result) return null;
+      return {
+        texto: result.getText(),
+        formato: formatName(result.getBarcodeFormat()),
+        esVerificacion: esURLVerificacion(result.getText())
+      };
     } catch (e) {
       return null;
     }
   }
 
-  /**
-   * Escaneo continuo desde <video>
-   * @returns {Function} función para detener
-   */
-  function scanFromVideo(videoElement, onDetected, onTimeout, timeoutMs = 20000) {
+  function scanFromVideo(videoElement, onDetected, onTimeout, timeoutMs = 15000) {
     const r = init();
     let activo = true;
-    let ultimoIntento = Date.now();
 
     const timer = setTimeout(() => {
       if (activo) {
@@ -64,16 +62,22 @@ const BarcodeReader = (() => {
       try {
         const result = await r.decodeFromVideoElement(videoElement);
         if (result && activo) {
-          activo = false;
-          clearTimeout(timer);
-          onDetected({
-            texto: result.getText(),
-            formato: formatName(result.getBarcodeFormat())
-          });
-          return;
+          const texto = result.getText();
+          const formato = formatName(result.getBarcodeFormat());
+          const esVerif = esURLVerificacion(texto);
+
+          // Si es QR de verificación, avisar pero SEGUIR buscando
+          if (formato === 'qr' && esVerif) {
+            if (window.__onQRSolo) window.__onQRSolo();
+          } else {
+            activo = false;
+            clearTimeout(timer);
+            onDetected({ texto, formato, esVerificacion: esVerif });
+            return;
+          }
         }
-      } catch (e) { /* sin código en este frame */ }
-      if (activo) setTimeout(loop, 180);
+      } catch (e) {}
+      if (activo) setTimeout(loop, 60);
     }
 
     loop();
@@ -82,6 +86,12 @@ const BarcodeReader = (() => {
       activo = false;
       clearTimeout(timer);
     };
+  }
+
+  function esURLVerificacion(texto) {
+    if (!texto) return false;
+    return /^https?:\/\/(www\.)?(argentina\.gob\.ar|dni\.argentina\.gob\.ar|renaper\.gob\.ar)/i.test(texto)
+        || /consulta-dni|verificar|verificacion/i.test(texto);
   }
 
   function formatName(format) {
@@ -96,5 +106,7 @@ const BarcodeReader = (() => {
     return 'pdf417';
   }
 
-  return { decode, scanFromVideo, init };
+  return { decode, scanFromVideo, init, esURLVerificacion };
 })();
+
+console.log('✅ scanner.js cargado');
