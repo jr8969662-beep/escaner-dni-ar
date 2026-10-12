@@ -1,25 +1,49 @@
 /**
- * Parser del DNI argentino
+ * Parser del DNI argentino - Universal
+ * Detecta automáticamente el formato del texto leído
  */
 
 const DNIParser = (() => {
 
+  /**
+   * Parser universal: detecta formato y delega
+   */
+  function parsearUniversal(texto) {
+    if (!texto || !texto.trim()) return null;
+    const t = texto.trim();
+
+    // Formato PDF417 del DNI argentino: contiene @ como delimitador
+    if (t.includes('@')) {
+      return parsearPDF417(t);
+    }
+
+    // URL con parámetros (algunos DNIe devuelven una URL)
+    if (/^https?:\/\//i.test(t)) {
+      return parsearURL(t);
+    }
+
+    // JSON estructurado
+    if (t.startsWith('{') && t.endsWith('}')) {
+      try {
+        const obj = JSON.parse(t);
+        return parsearJSON(obj);
+      } catch (e) { /* no es JSON válido */ }
+    }
+
+    // Fallback: tratar como texto OCR
+    const data = parsearOCR(t);
+    data.metodo = 'ocr';
+    return data;
+  }
+
   function parsearPDF417(texto) {
     if (!texto) return null;
-
     let raw = String(texto).trim().replace(/\r/g, '');
     let campos = raw.split('@').map(c => c.trim());
     while (campos.length && !campos[0]) campos.shift();
     while (campos.length && !campos[campos.length - 1]) campos.pop();
 
-    const data = {
-      metodo: 'pdf417',
-      raw: texto,
-      dni: null, apellido: null, nombre: null, sexo: null,
-      fechaNacimiento: null, fechaEmision: null, fechaVencimiento: null,
-      ejemplar: null, tramite: null, cuil: null,
-      nacionalidad: 'ARGENTINA'
-    };
+    const data = baseData('pdf417', texto);
 
     for (const campo of campos) {
       if (!data.dni && /^\d{7,8}$/.test(campo)) data.dni = campo;
@@ -49,18 +73,52 @@ const DNIParser = (() => {
       if (m) data.dni = m[1];
     }
 
-    data.fechaNacimiento = Validators.normalizarFecha(data.fechaNacimiento);
-    data.fechaEmision    = Validators.normalizarFecha(data.fechaEmision);
-    data.fechaVencimiento= Validators.normalizarFecha(data.fechaVencimiento);
+    return finalizar(data);
+  }
 
-    data.validaciones = {
-      dni: Validators.validarDNI(data.dni),
-      cuil: data.cuil ? Validators.validarCUIL(data.cuil) : null,
-      fechaNacimiento: data.fechaNacimiento ? Validators.validarFecha(data.fechaNacimiento) : null,
-      edad: data.fechaNacimiento ? Validators.calcularEdad(data.fechaNacimiento) : null
+  function parsearURL(url) {
+    const data = baseData('qr', url);
+    try {
+      const u = new URL(url);
+      const params = u.searchParams;
+      const map = {
+        dni: ['dni', 'documento', 'doc', 'nro', 'numero'],
+        apellido: ['apellido', 'apellidos', 'surname', 'lastname'],
+        nombre: ['nombre', 'nombres', 'name', 'firstname'],
+        sexo: ['sexo', 'sex', 'genero'],
+        fechaNacimiento: ['nacimiento', 'fechanac', 'birthdate', 'fnac'],
+        cuil: ['cuil', 'cuit']
+      };
+      for (const [key, aliases] of Object.entries(map)) {
+        for (const alias of aliases) {
+          const v = params.get(alias);
+          if (v) { data[key] = v; break; }
+        }
+      }
+      data.raw = url;
+    } catch (e) {}
+    return finalizar(data);
+  }
+
+  function parsearJSON(obj) {
+    const data = baseData('qr', JSON.stringify(obj));
+    const pick = (aliases) => {
+      for (const a of aliases) {
+        if (obj[a] != null) return String(obj[a]);
+      }
+      return null;
     };
-
-    return data;
+    data.dni = pick(['dni', 'documento', 'numero', 'nro']);
+    data.apellido = pick(['apellido', 'apellidos', 'surname']);
+    data.nombre = pick(['nombre', 'nombres', 'name']);
+    data.sexo = pick(['sexo', 'sex', 'genero']);
+    data.fechaNacimiento = pick(['fechaNacimiento', 'nacimiento', 'fecha_nac']);
+    data.fechaEmision = pick(['fechaEmision', 'emision']);
+    data.fechaVencimiento = pick(['fechaVencimiento', 'vencimiento']);
+    data.cuil = pick(['cuil', 'cuit']);
+    data.ejemplar = pick(['ejemplar']);
+    data.tramite = pick(['tramite', 'numeroTramite']);
+    return finalizar(data);
   }
 
   function parsearOCR(texto) {
@@ -68,13 +126,7 @@ const DNIParser = (() => {
     const raw = texto.replace(/\s+/g, ' ').trim();
     const upper = raw.toUpperCase();
 
-    const data = {
-      metodo: 'ocr', raw: texto,
-      dni: null, apellido: null, nombre: null, sexo: null,
-      fechaNacimiento: null, fechaEmision: null, fechaVencimiento: null,
-      ejemplar: null, tramite: null, cuil: null,
-      nacionalidad: null, validaciones: {}
-    };
+    const data = baseData('ocr', texto);
 
     const mDni = upper.match(/\bDNI[:\s]*(\d{7,8})\b/) || upper.match(/\b(\d{8})\b/);
     if (mDni) data.dni = mDni[1];
@@ -106,6 +158,21 @@ const DNIParser = (() => {
     if (candidatos[0]) data.apellido = candidatos[0].toUpperCase();
     if (candidatos[1]) data.nombre = candidatos[1].toUpperCase();
 
+    return finalizar(data);
+  }
+
+  // ---- Helpers ----
+  function baseData(metodo, raw) {
+    return {
+      metodo, raw,
+      dni: null, apellido: null, nombre: null, sexo: null,
+      fechaNacimiento: null, fechaEmision: null, fechaVencimiento: null,
+      ejemplar: null, tramite: null, cuil: null,
+      nacionalidad: 'ARGENTINA'
+    };
+  }
+
+  function finalizar(data) {
     data.fechaNacimiento = Validators.normalizarFecha(data.fechaNacimiento);
     data.fechaEmision    = Validators.normalizarFecha(data.fechaEmision);
     data.fechaVencimiento= Validators.normalizarFecha(data.fechaVencimiento);
@@ -116,9 +183,8 @@ const DNIParser = (() => {
       fechaNacimiento: data.fechaNacimiento ? Validators.validarFecha(data.fechaNacimiento) : null,
       edad: data.fechaNacimiento ? Validators.calcularEdad(data.fechaNacimiento) : null
     };
-
     return data;
   }
 
-  return { parsearPDF417, parsearOCR };
+  return { parsearUniversal, parsearPDF417, parsearOCR };
 })();
