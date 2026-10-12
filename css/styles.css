@@ -738,6 +738,7 @@ body {
   border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover { background: #3a4050; }
+
 /* ============================================================
    FIX: los elementos con [hidden] deben ocultarse SIEMPRE
    (aunque el CSS les ponga display: flex)
