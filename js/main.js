@@ -1,16 +1,16 @@
 /**
- * Lógica principal: inicialización, eventos y flujo en cascada
+ * Lógica principal - con escaneo en vivo y cascada de intentos
  */
 
 (() => {
   'use strict';
 
-  // ---- Referencias DOM ----
   const video = document.getElementById('video');
   const preview = document.getElementById('preview');
   const canvas = document.getElementById('canvas');
   const overlay = document.getElementById('overlay');
   const btnStart = document.getElementById('btnStart');
+  const btnLive = document.getElementById('btnLive');
   const btnScanPDF417 = document.getElementById('btnScanPDF417');
   const btnScanOCR = document.getElementById('btnScanOCR');
   const btnNFC = document.getElementById('btnNFC');
@@ -23,24 +23,17 @@
   const resultBox = document.getElementById('result');
   const badgeMetodo = document.getElementById('badgeMetodo');
 
-  // ---- Estado ----
   let stream = null;
-  let stopScanFn = null; // función para detener el escaneo continuo
+  let stopLiveScan = null;
 
   // ---- Helpers UI ----
-  function showError(msg) {
-    errorEl.textContent = msg;
-  }
-  function clearError() {
-    errorEl.textContent = '';
-  }
+  function showError(msg) { errorEl.textContent = msg; }
+  function clearError() { errorEl.textContent = ''; }
   function showLoader(msg = 'Procesando…') {
     loaderText.textContent = msg;
     loader.style.display = 'flex';
   }
-  function hideLoader() {
-    loader.style.display = 'none';
-  }
+  function hideLoader() { loader.style.display = 'none'; }
 
   // ---- Cámara ----
   async function startCamera() {
@@ -59,6 +52,7 @@
       overlay.style.display = 'flex';
 
       btnStart.disabled = true;
+      btnLive.disabled = false;
       btnScanPDF417.disabled = false;
       btnScanOCR.disabled = false;
       if (NFCReader.isSupported()) btnNFC.disabled = false;
@@ -74,16 +68,27 @@
     }
   }
 
+  // ---- Captura con preprocesamiento (contraste + grises) ----
   function captureFrame() {
     const w = video.videoWidth;
     const h = video.videoHeight;
-    if (!w || !h) {
-      throw new Error('La cámara no está lista todavía.');
-    }
+    if (!w || !h) throw new Error('La cámara no está lista todavía.');
+
     canvas.width = w;
     canvas.height = h;
     const ctx = canvas.getContext('2d');
     ctx.drawImage(video, 0, 0, w, h);
+
+    const imgData = ctx.getImageData(0, 0, w, h);
+    const data = imgData.data;
+    for (let i = 0; i < data.length; i += 4) {
+      const gris = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+      let v = (gris - 128) * 1.4 + 128;
+      v = Math.max(0, Math.min(255, v));
+      data[i] = data[i + 1] = data[i + 2] = v;
+    }
+    ctx.putImageData(imgData, 0, 0);
+
     return canvas.toDataURL('image/jpeg', 0.95);
   }
 
@@ -95,21 +100,105 @@
     btnReset.style.display = 'inline-block';
     btnScanPDF417.disabled = true;
     btnScanOCR.disabled = true;
+    btnLive.disabled = true;
   }
 
-  // ---- Render de resultado ----
+  // ---- Utilidades de imagen ----
+  function recortarCentro(imageSrc, factor = 0.6) {
+    return new Promise(resolve => {
+      const img = new Image();
+      img.onload = () => {
+        const w = img.width * factor;
+        const h = img.height * factor;
+        const x = (img.width - w) / 2;
+        const y = (img.height - h) / 2;
+        const c = document.createElement('canvas');
+        c.width = w; c.height = h;
+        c.getContext('2d').drawImage(img, x, y, w, h, 0, 0, w, h);
+        resolve(c.toDataURL('image/jpeg', 0.95));
+      };
+      img.src = imageSrc;
+    });
+  }
+
+  function escalarImagen(imageSrc, factor = 2) {
+    return new Promise(resolve => {
+      const img = new Image();
+      img.onload = () => {
+        const c = document.createElement('canvas');
+        c.width = img.width * factor;
+        c.height = img.height * factor;
+        const ctx = c.getContext('2d');
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(img, 0, 0, c.width, c.height);
+        resolve(c.toDataURL('image/jpeg', 0.95));
+      };
+      img.src = imageSrc;
+    });
+  }
+
+  function binarizar(imageSrc, umbral = 128) {
+    return new Promise(resolve => {
+      const img = new Image();
+      img.onload = () => {
+        const c = document.createElement('canvas');
+        c.width = img.width; c.height = img.height;
+        const ctx = c.getContext('2d');
+        ctx.drawImage(img, 0, 0);
+        const d = ctx.getImageData(0, 0, c.width, c.height);
+        const p = d.data;
+        for (let i = 0; i < p.length; i += 4) {
+          const g = 0.299 * p[i] + 0.587 * p[i + 1] + 0.114 * p[i + 2];
+          const v = g > umbral ? 255 : 0;
+          p[i] = p[i + 1] = p[i + 2] = v;
+        }
+        ctx.putImageData(d, 0, 0);
+        resolve(c.toDataURL('image/jpeg', 0.95));
+      };
+      img.src = imageSrc;
+    });
+  }
+
+  // ---- Cascada de intentos ----
+  async function intentarLeerPDF417(imageSrc, onPaso) {
+    // Intento 1: normal
+    if (onPaso) onPaso('Intento 1/4…');
+    let texto = await PDF417Reader.decode(imageSrc);
+    if (texto) return texto;
+
+    // Intento 2: recorte central
+    if (onPaso) onPaso('Intento 2/4…');
+    const recortado = await recortarCentro(imageSrc, 0.7);
+    texto = await PDF417Reader.decode(recortado);
+    if (texto) return texto;
+
+    // Intento 3: escalado x2
+    if (onPaso) onPaso('Intento 3/4…');
+    const escalado = await escalarImagen(imageSrc, 2);
+    texto = await PDF417Reader.decode(escalado);
+    if (texto) return texto;
+
+    // Intento 4: binarizado
+    if (onPaso) onPaso('Intento 4/4…');
+    const binarizado = await binarizar(imageSrc);
+    texto = await PDF417Reader.decode(binarizado);
+    return texto;
+  }
+
+  // ---- Render ----
   function render(data) {
     if (!data) {
-      showError('No se pudieron extraer datos del documento.');
+      showError('No se pudieron extraer datos.');
       return;
     }
 
     document.getElementById('rDni').textContent = data.dni || '—';
     document.getElementById('rApellido').textContent = data.apellido || '—';
     document.getElementById('rNombre').textContent = data.nombre || '—';
-    document.getElementById('rSexo').textContent = data.sexo === 'M' ? 'Masculino'
-                                                    : data.sexo === 'F' ? 'Femenino'
-                                                    : (data.sexo || '—');
+    document.getElementById('rSexo').textContent =
+      data.sexo === 'M' ? 'Masculino' :
+      data.sexo === 'F' ? 'Femenino' :
+      (data.sexo || '—');
     document.getElementById('rNacimiento').textContent = data.fechaNacimiento || '—';
     document.getElementById('rEmision').textContent = data.fechaEmision || '—';
     document.getElementById('rVencimiento').textContent = data.fechaVencimiento || '—';
@@ -119,12 +208,10 @@
     document.getElementById('rNacionalidad').textContent = data.nacionalidad || '—';
     document.getElementById('rRaw').textContent = data.raw || '—';
 
-    // Mostrar edad junto a la fecha de nacimiento si está disponible
-    if (data.validaciones && data.validaciones.edad !== null && data.validaciones.edad !== undefined) {
+    if (data.validaciones && data.validaciones.edad != null) {
       document.getElementById('rNacimiento').textContent += ` (${data.validaciones.edad} años)`;
     }
 
-    // Badge del método
     badgeMetodo.textContent = data.metodo.toUpperCase();
     badgeMetodo.className = 'badge ' + data.metodo;
 
@@ -132,14 +219,16 @@
     resultBox.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
-  // ---- Flujo PDF417 ----
+  // ---- Flujo PDF417 con cascada ----
   async function runPDF417(imageSrc) {
     clearError();
-    showLoader('Buscando código PDF417…');
+    showLoader('Buscando PDF417…');
     try {
-      const texto = await PDF417Reader.decode(imageSrc);
+      const texto = await intentarLeerPDF417(imageSrc, (paso) => {
+        loaderText.textContent = paso;
+      });
       if (!texto) {
-        showError('No se detectó PDF417. Probá con mejor luz o usá el OCR.');
+        showError('No se detectó el PDF417. Probá con más luz, sin reflejos, y acercate al código.');
         return;
       }
       const data = DNIParser.parsearPDF417(texto);
@@ -154,7 +243,7 @@
   // ---- Flujo OCR ----
   async function runOCR(imageSrc) {
     clearError();
-    showLoader('Ejecutando OCR… (puede tardar)');
+    showLoader('Ejecutando OCR…');
     try {
       const texto = await OCRReader.recognize(imageSrc, (m) => {
         if (m.status === 'recognizing text') {
@@ -176,10 +265,8 @@
     showLoader('Acercá el DNI al lector NFC…');
     try {
       const resultado = await NFCReader.read(30000);
-      // El chip del DNIe devuelve datos estructurados; acá mostramos el raw
-      // En producción se requiere BAC/PACE + CAN para acceso seguro
       console.log('NFC leído:', resultado);
-      showError('NFC detectado. Para leer los datos del DNIe se requiere el código CAN y un SDK especializado.');
+      showError('NFC detectado. Para leer los datos del DNIe se requiere el código CAN.');
     } catch (e) {
       showError('Error NFC: ' + e.message);
     } finally {
@@ -189,6 +276,35 @@
 
   // ---- Eventos ----
   btnStart.addEventListener('click', startCamera);
+
+  btnLive.addEventListener('click', () => {
+    if (stopLiveScan) {
+      stopLiveScan();
+      stopLiveScan = null;
+      btnLive.textContent = '🎯 Escaneo en vivo';
+      return;
+    }
+
+    clearError();
+    btnLive.textContent = '⏹ Detener';
+    showError('Apuntá al PDF417 y mantené el pulso firme…');
+
+    stopLiveScan = PDF417Reader.scanFromVideo(
+      video,
+      (texto) => {
+        stopLiveScan = null;
+        btnLive.textContent = '🎯 Escaneo en vivo';
+        clearError();
+        const data = DNIParser.parsearPDF417(texto);
+        render(data);
+      },
+      (err) => {
+        stopLiveScan = null;
+        btnLive.textContent = '🎯 Escaneo en vivo';
+        showError(err);
+      }
+    );
+  });
 
   btnScanPDF417.addEventListener('click', () => {
     try {
@@ -211,7 +327,6 @@
   });
 
   btnNFC.addEventListener('click', runNFC);
-
   btnUpload.addEventListener('click', () => fileInput.click());
 
   fileInput.addEventListener('change', (e) => {
@@ -220,7 +335,6 @@
     const reader = new FileReader();
     reader.onload = ev => {
       showImage(ev.target.result);
-      // Intentar PDF417 primero, luego OCR
       runPDF417(ev.target.result).then(() => {
         if (!resultBox.classList.contains('active')) {
           runOCR(ev.target.result);
@@ -239,14 +353,12 @@
     if (!stream) startCamera();
   });
 
-  // Limpieza al salir
   window.addEventListener('beforeunload', () => {
     stopCamera();
-    if (stopScanFn) stopScanFn();
+    if (stopLiveScan) stopLiveScan();
     OCRReader.terminate();
   });
 
-  // Detectar soporte NFC al inicio
   if (!NFCReader.isSupported()) {
     btnNFC.title = 'NFC no soportado en este navegador';
   }
