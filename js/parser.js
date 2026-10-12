@@ -1,12 +1,12 @@
 /**
  * Parser del DNI argentino
- * Soporta: PDF417, MRZ (ICAO 9301), QR de verificación y OCR
+ * Soporta: MRZ (dorso), PDF417 (frente), QR verificación y OCR
  */
 
 const DNIParser = (() => {
 
   // ==========================================
-  // PARSER UNIVERSAL (detecta formato)
+  // PARSER UNIVERSAL
   // ==========================================
   function parsearUniversal(texto) {
     if (!texto || !texto.trim()) return null;
@@ -15,7 +15,7 @@ const DNIParser = (() => {
     // 1) PDF417 con @ como delimitador
     if (t.includes('@')) return parsearPDF417(t);
 
-    // 2) MRZ (3 líneas de 30 chars con < y mayúsculas)
+    // 2) MRZ (buscar antes que URL/JSON)
     if (esMRZ(t)) return parsearMRZ(t);
 
     // 3) URL de verificación
@@ -31,83 +31,98 @@ const DNIParser = (() => {
   }
 
   // ==========================================
-  // DETECTOR DE MRZ
+  // DETECTOR MRZ
   // ==========================================
   function esMRZ(texto) {
-    const lineas = texto.split(/[\n\r]+/).map(l => l.trim()).filter(Boolean);
-    // Buscar al menos 2 líneas que empiecen con patrón MRZ
-    const candidatas = lineas.filter(l =>
-      /^[A-Z0-9<]{20,44}$/.test(l.replace(/\s/g, ''))
-    );
-    return candidatas.length >= 2;
+    if (!texto) return false;
+    const limpio = texto.toUpperCase();
+    const tieneID = /ID[A-Z]{3}\d{6,}/.test(limpio.replace(/[\s<]/g, ''));
+    const tieneFillers = /<{5,}/.test(limpio);
+    const tieneFecha = /\d{6}[0-9<][MF<]/.test(limpio.replace(/\s/g, ''));
+    return tieneID || (tieneFillers && tieneFecha);
   }
 
   // ==========================================
-  // PARSER MRZ (TD1 - 3 líneas de 30 chars)
+  // PARSER MRZ (robusto contra ruido del OCR)
   // ==========================================
   function parsearMRZ(texto) {
-    // Extraer líneas MRZ (limpiar OCR noise: espacios, puntos, etc.)
-    const todasLineas = texto.split(/[\n\r]+/).map(l => l.trim()).filter(Boolean);
-    let lineasMRZ = todasLineas
-      .map(l => l.replace(/[^A-Z0-9<]/gi, '').toUpperCase())
-      .filter(l => l.length >= 25 && l.length <= 44);
+    const lineasRaw = texto.split(/[\n\r]+/);
 
-    // Necesitamos al menos 3 líneas. Si solo hay 2, intentar reconstruir.
-    if (lineasMRZ.length < 3) {
-      // Fallback: intentar detectar un bloque de 90 chars contiguos
-      const bloque = texto.replace(/[^A-Z0-9<]/gi, '').toUpperCase();
-      if (bloque.length >= 90) {
+    // Limpiar cada línea: solo A-Z, 0-9 y <
+    const lineasLimp = lineasRaw
+      .map(l => l.toUpperCase().replace(/[^A-Z0-9<]/g, ''))
+      .filter(l => l.length >= 20);
+
+    let lineasMRZ = [];
+
+    if (lineasLimp.length >= 3) {
+      lineasMRZ = lineasLimp.slice(0, 3);
+    } else if (lineasLimp.length >= 1) {
+      const todo = lineasLimp.join('');
+      if (todo.length >= 90) {
         lineasMRZ = [
-          bloque.substring(0, 30),
-          bloque.substring(30, 60),
-          bloque.substring(60, 90)
+          todo.substring(0, 30),
+          todo.substring(30, 60),
+          todo.substring(60, 90)
+        ];
+      } else if (todo.length >= 60) {
+        lineasMRZ = [
+          todo.substring(0, 30),
+          todo.substring(30, 60),
+          ''
         ];
       } else {
         return null;
       }
+    } else {
+      return null;
     }
 
-    // Tomar las primeras 3 líneas MRZ
-    let [l1, l2, l3] = lineasMRZ.map(l => padRight(l.substring(0, 30), 30, '<'));
+    lineasMRZ = lineasMRZ.map(l => padRight(l.substring(0, 30), 30, '<'));
+
+    let l1 = lineasMRZ[0], l2 = lineasMRZ[1], l3 = lineasMRZ[2];
+
+    // Si la primera línea no empieza con ID, buscar la correcta
+    if (!/^ID/.test(l1)) {
+      const idx = lineasMRZ.findIndex(l => /^ID[A-Z]{3}/.test(l));
+      if (idx > 0) {
+        lineasMRZ = [...lineasMRZ.slice(idx), ...lineasMRZ.slice(0, idx)];
+        l1 = lineasMRZ[0]; l2 = lineasMRZ[1]; l3 = lineasMRZ[2];
+      }
+    }
 
     const data = baseData('mrz', texto);
-    data.pais = l1.substring(0, 2) === 'ID' ? l1.substring(2, 5) : null;
+    data.pais = l1.substring(2, 5);
 
-    // --- Línea 1: número de documento ---
-    // Posiciones 6-14 (9 chars) = número con < de relleno
-    // Posición 15 = dígito verificador
+    // Línea 1: número documento (pos 5-13)
     const numDocRaw = l1.substring(5, 14).replace(/</g, '');
-    const checkDoc = l1.substring(14, 15);
+    const checkDoc = l1.charAt(14);
     data.dni = numDocRaw || null;
-    data.validaciones = data.validaciones || {};
-    data.validaciones.checkDoc = checkDoc;
 
-    // --- Línea 2: fecha nacimiento, sexo, vencimiento ---
+    // Línea 2: fecha nac + sexo + vencimiento + nacionalidad
     const dobRaw = l2.substring(0, 6);
     const dobCheck = l2.charAt(6);
     const sexo = l2.charAt(7);
     const expRaw = l2.substring(8, 14);
     const expCheck = l2.charAt(14);
     const nacionalidad = l2.substring(15, 18).replace(/</g, '');
-    const compositeCheck = l2.charAt(29);
 
     data.fechaNacimiento = yymmddToISO(dobRaw);
     data.sexo = sexo === 'M' ? 'M' : sexo === 'F' ? 'F' : null;
     data.fechaVencimiento = yymmddToISO(expRaw);
     data.nacionalidad = nacionalidad === 'ARG' ? 'ARGENTINA' : nacionalidad;
 
-    // Verificar dígitos de control (ICAO 9303)
-    data.validaciones.checkDob  = checkDigitMRZ(dobRaw) === dobCheck;
-    data.validaciones.checkExp  = checkDigitMRZ(expRaw) === expCheck;
-    data.validaciones.checkDoc  = checkDigitMRZ(l1.substring(5, 14)) === checkDoc;
+    data.validaciones = data.validaciones || {};
+    data.validaciones.checkDoc = checkDigitMRZ(l1.substring(5, 14)) === checkDoc;
+    data.validaciones.checkDob = checkDigitMRZ(dobRaw) === dobCheck;
+    data.validaciones.checkExp = checkDigitMRZ(expRaw) === expCheck;
 
-    // --- Línea 3: apellido << nombre ---
+    // Línea 3: APELLIDO<<NOMBRE
     const l3clean = l3.replace(/<+$/, '');
     const partes = l3clean.split('<<');
     if (partes[0]) data.apellido = partes[0].replace(/</g, ' ').trim();
     if (partes[1]) data.nombre = partes[1].replace(/</g, ' ').trim();
 
-    // Ajustar año de nacimiento (si es > hoy, restar 100 años)
     data.fechaNacimiento = ajustarSiglo(data.fechaNacimiento);
 
     return finalizar(data);
@@ -122,7 +137,6 @@ const DNIParser = (() => {
     const yy = parseInt(yymmdd.substring(0, 2), 10);
     const mm = yymmdd.substring(2, 4);
     const dd = yymmdd.substring(4, 6);
-    // Asumir 19xx si yy > 30, sino 20xx (heurística)
     const yyyy = yy > 30 ? 1900 + yy : 2000 + yy;
     return `${yyyy}-${mm}-${dd}`;
   }
@@ -131,7 +145,6 @@ const DNIParser = (() => {
     if (!fechaISO) return null;
     const hoy = new Date();
     const fecha = new Date(fechaISO);
-    // Si la fecha está en el futuro, probablemente el siglo está mal
     if (fecha > hoy) {
       const y = fecha.getFullYear() - 100;
       return `${y}-${fechaISO.substring(5)}`;
@@ -139,9 +152,6 @@ const DNIParser = (() => {
     return fechaISO;
   }
 
-  // ==========================================
-  // DÍGITO VERIFICADOR MRZ (ICAO 9303)
-  // ==========================================
   function checkDigitMRZ(str) {
     const weights = [7, 3, 1];
     const valor = (c) => {
@@ -158,7 +168,7 @@ const DNIParser = (() => {
   }
 
   // ==========================================
-  // PARSER PDF417 (por si el frente lo tiene)
+  // PARSER PDF417
   // ==========================================
   function parsearPDF417(texto) {
     if (!texto) return null;
@@ -201,7 +211,7 @@ const DNIParser = (() => {
   }
 
   // ==========================================
-  // PARSER URL (QR de verificación)
+  // PARSER URL
   // ==========================================
   function parsearURL(url) {
     const data = baseData('qr', url);
@@ -248,15 +258,16 @@ const DNIParser = (() => {
   }
 
   // ==========================================
-  // PARSER OCR (texto libre del frente)
+  // PARSER OCR (texto libre)
   // ==========================================
   function parsearOCR(texto) {
     if (!texto) return null;
+
+    // ¿Hay MRZ embebida?
+    if (esMRZ(texto)) return parsearMRZ(texto);
+
     const raw = texto.replace(/\s+/g, ' ').trim();
     const upper = raw.toUpperCase();
-
-    // ¿Parece que hay una MRZ embebida en el OCR?
-    if (esMRZ(texto)) return parsearMRZ(texto);
 
     const data = baseData('ocr', texto);
 
@@ -317,11 +328,7 @@ const DNIParser = (() => {
     return data;
   }
 
-  return {
-    parsearUniversal,
-    parsearPDF417,
-    parsearMRZ,
-    parsearOCR,
-    esMRZ
-  };
+  return { parsearUniversal, parsearPDF417, parsearMRZ, parsearOCR, esMRZ };
 })();
+
+console.log('✅ parser.js cargado');
