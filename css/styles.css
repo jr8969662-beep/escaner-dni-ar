@@ -738,3 +738,13 @@ body {
   border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover { background: #3a4050; }
+/* ============================================================
+   FIX: los elementos con [hidden] deben ocultarse SIEMPRE
+   (aunque el CSS les ponga display: flex)
+   ============================================================ */
+.camera-error[hidden] { display: none !important; }
+.result-card[hidden] { display: none !important; }
+.modal[hidden] { display: none !important; }
+.toast[hidden] { display: none !important; }
+.camera-img[hidden] { display: none !important; }
+.camera-viewport video[hidden] { display: none !important; }
