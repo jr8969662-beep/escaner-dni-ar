@@ -1,56 +1,83 @@
 /**
- * Lector de códigos (PDF417, QR, Code128, etc) con ZXing
- * Expone el objeto BarcodeReader (NO PDF417Reader)
+ * Escáner de códigos - BarcodeDetector nativo + jsQR fallback
+ * Basado en el proyecto Trámites Policiales Salta
  */
 
-const BarcodeReader = (() => {
+const DNIScanner = (() => {
 
-  let reader = null;
+  let detector = null;
+  const barcodeDisponible = !!window.BarcodeDetector;
+  const jsQRDisponible = !!window.jsQR;
 
-  function buildHints() {
-    const h = new Map();
-    h.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
-      ZXing.BarcodeFormat.PDF_417,
-      ZXing.BarcodeFormat.CODE_128,
-      ZXing.BarcodeFormat.CODE_39,
-      ZXing.BarcodeFormat.DATA_MATRIX,
-      ZXing.BarcodeFormat.AZTEC,
-      ZXing.BarcodeFormat.QR_CODE
-    ]);
-    h.set(ZXing.DecodeHintType.TRY_HARDER, true);
-    h.set(ZXing.DecodeHintType.ALSO_INVERTED, true);
-    return h;
-  }
-
-  function init() {
-    if (reader) return reader;
-    reader = new ZXing.BrowserMultiFormatReader(buildHints(), {
-      delayBetweenScanAttempts: 60,
-      delayBetweenScanSuccess: 500
-    });
-    return reader;
-  }
-
-  async function decode(imageSource) {
-    const r = init();
+  if (barcodeDisponible) {
     try {
-      const result = await r.decodeFromImageUrl(imageSource);
-      if (!result) return null;
-      return {
-        texto: result.getText(),
-        formato: formatName(result.getBarcodeFormat()),
-        esVerificacion: esURLVerificacion(result.getText())
-      };
+      detector = new BarcodeDetector({ formats: ['pdf417', 'qr_code', 'code_128', 'code_39'] });
+      console.log('✅ BarcodeDetector nativo activo');
     } catch (e) {
-      return null;
+      console.warn('⚠️ BarcodeDetector no soporta esos formatos:', e);
+      detector = null;
     }
   }
+  if (!barcodeDisponible && jsQRDisponible) {
+    console.log('⚠️ Usando jsQR (compatibilidad)');
+  }
+  if (!barcodeDisponible && !jsQRDisponible) {
+    console.warn('❌ Ningún decodificador disponible');
+  }
 
-  function scanFromVideo(videoElement, onDetected, onTimeout, timeoutMs = 15000) {
-    const r = init();
+  /**
+   * Escanea UN frame de un canvas
+   * @returns {Promise<string|null>} texto crudo o null
+   */
+  async function escanearFrame(canvas) {
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+
+    // 1) Intentar con BarcodeDetector nativo
+    if (detector) {
+      try {
+        const codigos = await detector.detect(canvas);
+        if (codigos && codigos.length) {
+          console.log('📷 Detectado con BarcodeDetector:', codigos[0].rawValue);
+          return codigos[0].rawValue;
+        }
+      } catch (e) { /* silencioso */ }
+    }
+
+    // 2) Fallback a jsQR
+    if (window.jsQR) {
+      try {
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const qr = window.jsQR(imageData.data, imageData.width, imageData.height, {
+          inversionAttempts: 'dontInvert'
+        });
+        if (qr && qr.data) {
+          console.log('📷 Detectado con jsQR:', qr.data);
+          return qr.data;
+        }
+      } catch (e) { /* silencioso */ }
+    }
+
+    return null;
+  }
+
+  /**
+   * Inicia escaneo continuo desde un <video> y un <canvas>
+   * @param {HTMLVideoElement} video
+   * @param {HTMLCanvasElement} canvas
+   * @param {Function} onDetected - callback(texto)
+   * @param {Function} onTimeout - callback() si no encuentra en X ms
+   * @param {Object} opciones - { intervaloMs, timeoutMs, anchoMax }
+   * @returns {Function} función para detener
+   */
+  function escanearContinuo(video, canvas, onDetected, onTimeout, opciones = {}) {
+    const intervaloMs = opciones.intervaloMs || 400;
+    const timeoutMs = opciones.timeoutMs || 20000;
+    const anchoMax = opciones.anchoMax || 1280;
+
     let activo = true;
+    let intentosSinDeteccion = 0;
 
-    const timer = setTimeout(() => {
+    const timerTimeout = setTimeout(() => {
       if (activo) {
         activo = false;
         if (onTimeout) onTimeout();
@@ -60,53 +87,48 @@ const BarcodeReader = (() => {
     async function loop() {
       if (!activo) return;
       try {
-        const result = await r.decodeFromVideoElement(videoElement);
-        if (result && activo) {
-          const texto = result.getText();
-          const formato = formatName(result.getBarcodeFormat());
-          const esVerif = esURLVerificacion(texto);
+        if (video.srcObject && video.readyState >= 2 && video.videoWidth) {
+          const escala = Math.min(1, anchoMax / video.videoWidth);
+          canvas.width = Math.round(video.videoWidth * escala);
+          canvas.height = Math.round(video.videoHeight * escala);
+          const ctx = canvas.getContext('2d', { willReadFrequently: true });
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-          // Si es QR de verificación, avisar pero SEGUIR buscando
-          if (formato === 'qr' && esVerif) {
-            if (window.__onQRSolo) window.__onQRSolo();
-          } else {
+          const texto = await escanearFrame(canvas);
+          if (texto && activo) {
             activo = false;
-            clearTimeout(timer);
-            onDetected({ texto, formato, esVerificacion: esVerif });
+            clearTimeout(timerTimeout);
+            onDetected(texto);
             return;
           }
+          intentosSinDeteccion++;
         }
-      } catch (e) {}
-      if (activo) setTimeout(loop, 60);
+      } catch (e) {
+        console.warn('Error escaneando frame:', e);
+      }
+      if (activo) setTimeout(loop, intervaloMs);
     }
 
     loop();
 
     return () => {
       activo = false;
-      clearTimeout(timer);
+      clearTimeout(timerTimeout);
     };
   }
 
-  function esURLVerificacion(texto) {
-    if (!texto) return false;
-    return /^https?:\/\/(www\.)?(argentina\.gob\.ar|dni\.argentina\.gob\.ar|renaper\.gob\.ar)/i.test(texto)
-        || /consulta-dni|verificar|verificacion/i.test(texto);
+  /**
+   * Decodifica un frame actual (para cuando el usuario aprieta un botón)
+   */
+  async function capturarYDecodificar(video, canvas, anchoMax = 1600) {
+    if (!video.srcObject || !video.videoWidth) return null;
+    const escala = Math.min(1, anchoMax / video.videoWidth);
+    canvas.width = Math.round(video.videoWidth * escala);
+    canvas.height = Math.round(video.videoHeight * escala);
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    return escanearFrame(canvas);
   }
 
-  function formatName(format) {
-    if (!format) return 'código';
-    const f = String(format);
-    if (f.includes('PDF_417')) return 'pdf417';
-    if (f.includes('QR')) return 'qr';
-    if (f.includes('DATA_MATRIX')) return 'qr';
-    if (f.includes('AZTEC')) return 'qr';
-    if (f.includes('CODE_128')) return 'pdf417';
-    if (f.includes('CODE_39')) return 'pdf417';
-    return 'pdf417';
-  }
-
-  return { decode, scanFromVideo, init, esURLVerificacion };
+  return { escanearContinuo, capturarYDecodificar, barcodeDisponible, jsQRDisponible };
 })();
-
-console.log('✅ scanner.js cargado');
