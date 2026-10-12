@@ -1,0 +1,316 @@
+/* ============================
+   Reset y base
+   ============================ */
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  --bg: #0f172a;
+  --surface: #1e293b;
+  --surface-2: #334155;
+  --border: #475569;
+  --text: #e2e8f0;
+  --text-muted: #94a3b8;
+  --primary: #38bdf8;
+  --primary-dark: #0ea5e9;
+  --danger: #ef4444;
+  --success: #22c55e;
+  --warning: #f59e0b;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  padding: 20px;
+  line-height: 1.5;
+}
+
+.container {
+  width: 100%;
+  max-width: 720px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* ============================
+   Header
+   ============================ */
+header {
+  text-align: center;
+  padding: 10px 0;
+}
+
+h1 {
+  font-size: clamp(1.4rem, 4vw, 1.9rem);
+  color: var(--primary);
+  margin-bottom: 4px;
+}
+
+.subtitle {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+/* ============================
+   Video / Preview
+   ============================ */
+.video-wrap {
+  position: relative;
+  background: var(--surface);
+  border-radius: 12px;
+  overflow: hidden;
+  aspect-ratio: 16 / 10;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+}
+
+video,
+img.preview {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+img.preview { display: none; }
+
+.overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: 14px;
+  pointer-events: none;
+}
+
+.overlay-label {
+  background: rgba(15, 23, 42, 0.85);
+  color: var(--primary);
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 6px 14px;
+  border-radius: 20px;
+  border: 1px solid rgba(56, 189, 248, 0.4);
+}
+
+/* ============================
+   Botones
+   ============================ */
+.controls {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+button {
+  padding: 12px 20px;
+  border: none;
+  border-radius: 8px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.15s, box-shadow 0.15s, background 0.15s;
+  font-family: inherit;
+  white-space: nowrap;
+}
+
+button.primary {
+  background: var(--primary);
+  color: #0f172a;
+}
+
+button.secondary {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+button.danger {
+  background: var(--danger);
+  color: white;
+}
+
+button:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 18px rgba(56, 189, 248, 0.25);
+}
+
+button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* ============================
+   Loader / Error
+   ============================ */
+.loader {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 14px;
+  background: var(--surface);
+  border-radius: 10px;
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.spinner {
+  width: 18px;
+  height: 18px;
+  border: 3px solid rgba(56, 189, 248, 0.3);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.error {
+  color: var(--danger);
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 0.9rem;
+  display: none;
+}
+
+.error:not(:empty) { display: block; }
+
+/* ============================
+   Resultado
+   ============================ */
+.result {
+  background: var(--surface);
+  border-radius: 12px;
+  padding: 20px;
+  display: none;
+  animation: fadeIn 0.3s ease;
+}
+
+.result.active { display: block; }
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.result-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--surface-2);
+}
+
+.result-header h2 {
+  font-size: 1.15rem;
+  color: var(--primary);
+}
+
+.badge {
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 12px;
+  background: var(--surface-2);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.badge.pdf417 { background: rgba(34, 197, 94, 0.2); color: var(--success); }
+.badge.ocr    { background: rgba(245, 158, 11, 0.2); color: var(--warning); }
+.badge.nfc    { background: rgba(56, 189, 248, 0.2); color: var(--primary); }
+
+.field {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid rgba(71, 85, 105, 0.4);
+  font-size: 0.92rem;
+}
+
+.field:last-of-type { border-bottom: none; }
+
+.field label {
+  color: var(--text-muted);
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.field span {
+  color: var(--text);
+  text-align: right;
+  word-break: break-word;
+}
+
+.field span.valid   { color: var(--success); }
+.field span.invalid { color: var(--danger); text-decoration: line-through; }
+
+/* Raw data */
+.raw-data {
+  margin-top: 16px;
+  border-top: 1px solid var(--surface-2);
+  padding-top: 12px;
+}
+
+.raw-data summary {
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  user-select: none;
+}
+
+.raw-data pre {
+  margin-top: 10px;
+  padding: 12px;
+  background: #0b1220;
+  border-radius: 8px;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+/* ============================
+   Footer
+   ============================ */
+.footer {
+  text-align: center;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  padding: 12px 0;
+}
+
+.footer a {
+  color: var(--primary);
+  text-decoration: none;
+}
+
+.footer a:hover { text-decoration: underline; }
+
+/* ============================
+   Responsive
+   ============================ */
+@media (max-width: 480px) {
+  body { padding: 12px; }
+  .controls { gap: 8px; }
+  button { padding: 10px 14px; font-size: 0.85rem; }
+  .field { font-size: 0.85rem; }
+}
