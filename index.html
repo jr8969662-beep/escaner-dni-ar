@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Escáner DNI</title>
 <meta name="theme-color" content="#08090d">
-<meta name="description" content="Escáner de DNI argentino. Lectura automática de QR, PDF417 y MRZ.">
+<meta name="description" content="Escáner de documentos de identidad sudamericanos.">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%234f7cff'/%3E%3Crect x='20' y='25' width='60' height='50' rx='6' fill='none' stroke='white' stroke-width='4'/%3E%3Ccircle cx='35' cy='45' r='7' fill='white'/%3E%3Cpath d='M50 40h25M50 50h25M25 65h50' stroke='white' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E">
 <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
@@ -24,12 +24,12 @@
         </svg>
       </div>
       <div class="brand-text">
-        <h1>Escáner DNI</h1>
-        <p>Lectura automática de documentos</p>
+        <h1>Escáner de Documentos</h1>
+        <p>Lectura automática · Sudamérica</p>
       </div>
     </div>
     <div class="header-actions">
-      <button type="button" class="icon-action" id="btn-historial" title="Historial">
+      <button type="button" class="icon-action" id="btn-historial" title="Historial" style="display:none;">
         <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
           <path d="M3 3v5h5M12 7v5l4 2"/>
@@ -93,13 +93,64 @@
 
   <!-- CÁMARA -->
   <section class="card camera-card">
+    <div class="camera-viewport" id="captura-dni">
+      <video id="scan-video" autoplay playsinline muted></video>
+      <div class="scan-frame" id="scan-frame">
+        <span class="corner tl"></span>
+        <span class="corner tr"></span>
+        <span class="corner bl"></span>
+        <span class="corner br"></span>
+        <div class="scan-line"></div>
+      </div>
+      <div class="camera-hint" id="camera-hint">Encuadrá el código del documento</div>
+      <div class="camera-error" id="camera-error" hidden>
+        <div class="camera-error-icon">📷</div>
+        <div class="camera-error-text" id="camera-error-text">No se pudo acceder a la cámara</div>
+        <button type="button" class="btn btn-secondary btn-sm" id="btn-retry-camara">Reintentar</button>
+      </div>
+      <button type="button" class="icon-btn flash-btn" id="flash-btn" title="Linterna">🔦</button>
+      <img class="camera-img" id="scan-img" hidden alt="Captura">
+    </div>
+
+    <canvas id="scan-canvas" hidden></canvas>
+
+    <div class="camera-actions">
+      <button type="button" class="btn btn-primary" id="btn-camara">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+          <circle cx="12" cy="13" r="4"/>
+        </svg>
+        <span>Activar cámara</span>
+      </button>
+      <button type="button" class="btn btn-secondary" id="btn-upload">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+          <path d="M17 8l-5-5-5 5M12 3v12"/>
+        </svg>
+        <span>Subir imagen</span>
+      </button>
+      <input type="file" id="file-input" accept="image/*" hidden>
+      <button type="button" class="btn btn-secondary" id="btn-repetir" hidden>
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M23 4v6h-6M1 20v-6h6"/>
+          <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+        </svg>
+        <span>Escanear otro</span>
+      </button>
+    </div>
+
+    <div class="status-line">
+      <span class="captura-estado">Esperando escaneo</span>
+      <span class="escaneo-estado"></span>
+    </div>
+  </section>
 
   <!-- RESULTADO -->
   <section class="card result-card" id="resultado" hidden>
     <div class="result-header">
       <div>
         <h2>Información detectada</h2>
-        <p class="result-subtitle">Datos extraídos del documento</p>
+        <p class="result-subtitle" id="result-pais">Datos extraídos del documento</p>
       </div>
       <span class="badge" id="badge-metodo">—</span>
     </div>
@@ -107,7 +158,7 @@
     <div class="group">
       <div class="group-title">Datos personales</div>
       <div class="field highlighted">
-        <span class="field-label">Número de DNI</span>
+        <span class="field-label" id="label-numero">Número de DNI</span>
         <span class="field-value" id="r-dni">—</span>
       </div>
       <div class="field"><span class="field-label">Nombre completo</span><span class="field-value" id="r-nombreCompleto">—</span></div>
@@ -139,7 +190,7 @@
 
     <div class="group">
       <div class="group-title">Validaciones</div>
-      <div class="field"><span class="field-label">DNI</span><span class="field-value" id="r-val-dni">—</span></div>
+      <div class="field"><span class="field-label">Número</span><span class="field-value" id="r-val-dni">—</span></div>
       <div class="field"><span class="field-label">CUIL</span><span class="field-value" id="r-val-cuil">—</span></div>
       <div class="field"><span class="field-label">Dígitos de control MRZ</span><span class="field-value" id="r-val-mrz">—</span></div>
     </div>
@@ -195,6 +246,7 @@
 <div class="toast" id="toast" hidden></div>
 
 <script src="js/validators.js"></script>
+<script src="js/parsers-mundo.js"></script>
 <script src="js/parser.js"></script>
 <script src="js/scanner.js"></script>
 <script src="js/main.js"></script>
