@@ -1,4 +1,4 @@
-const CACHE_NAME = 'escaner-dni-v1';
+const CACHE_NAME = 'escaner-dni-v2';
 const ASSETS = [
   './',
   './index.html',
@@ -9,6 +9,7 @@ const ASSETS = [
   './js/scanner.js',
   './js/main.js',
   'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js'
+  'https://cdn.jsdelivr.net/npm/@zxing/library@0.21.0/umd/index.min.js'
 ];
 
 self.addEventListener('install', (event) => {
