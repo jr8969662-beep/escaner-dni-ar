@@ -867,3 +867,16 @@ body {
   .country-chip { padding: 9px 14px; font-size: 0.82rem; }
   .country-chip .flag { font-size: 1rem; }
 }
+/* ============================================================
+   ANIMACIÓN DE PULSO PARA EL CHIP SUGERIDO
+   ============================================================ */
+@keyframes chipPulse {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 1px var(--border);
+  }
+  50% {
+    transform: scale(1.08);
+    box-shadow: 0 0 0 3px var(--warning), 0 4px 14px rgba(245, 158, 11, 0.4);
+  }
+}
