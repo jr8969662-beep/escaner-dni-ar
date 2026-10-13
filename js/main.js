@@ -1,9 +1,6 @@
 (() => {
   'use strict';
 
-  // ==========================================
-  // CONFIG
-  // ==========================================
   const DEBUG = false;
   const STORAGE_KEY = 'escaner_dni_historial';
   const MAX_HISTORIAL = 50;
@@ -11,14 +8,9 @@
   const TEMA_KEY = 'tema_escaner';
   const SONIDO_KEY = 'sonido_escaner';
 
-  // ==========================================
-  // DEBUG
-  // ==========================================
   function log(msg) { if (DEBUG) console.log(msg); }
 
-  // ==========================================
   // DOM
-  // ==========================================
   const video = document.getElementById('scan-video');
   const canvas = document.getElementById('scan-canvas');
   const img = document.getElementById('scan-img');
@@ -60,19 +52,13 @@
   let stopScan = null;
   let ultimoResultado = null;
   let paisSeleccionado = localStorage.getItem(PAIS_KEY) || 'arg';
-  let sonidoActivo = localStorage.getItem(SONIDO_KEY) !== 'false';
+  const sonidoActivo = localStorage.getItem(SONIDO_KEY) !== 'false';
 
-  // ==========================================
-  // BANDERAS POR PAÍS
-  // ==========================================
   const BANDERAS = {
     arg: '🇦🇷', chl: '🇨🇱', ury: '🇺🇾', pry: '🇵🇾', per: '🇵🇪',
     bol: '🇧🇴', col: '🇨🇴', ecu: '🇪🇨', ven: '🇻🇪', bra: '🇧🇷'
   };
 
-  // ==========================================
-  // HELPERS
-  // ==========================================
   function setStatus(texto, tipo = 'idle') {
     if (statusText) statusText.textContent = texto;
     if (statusPill) {
@@ -100,27 +86,16 @@
     if (scanFrame) scanFrame.classList.remove('activo');
     if (cameraHint) cameraHint.style.opacity = '0';
   }
+  function ocultarErrorCamara() { if (cameraError) cameraError.hidden = true; }
 
-  function ocultarErrorCamara() {
-    if (cameraError) cameraError.hidden = true;
-  }
-
-  // ==========================================
-  // SONIDO + VIBRACIÓN
-  // ==========================================
+  // SONIDO
   function reproducirSonidoExito() {
     if (!sonidoActivo) return;
     try {
-      const AudioContext = window.AudioContext || window.webkitAudioContext;
-      if (!AudioContext) return;
-      const ctx = new AudioContext();
-
-      // Dos tonos cortos ascendentes (agradable)
-      const notas = [
-        { freq: 880, start: 0, dur: 0.08 },
-        { freq: 1318.5, start: 0.09, dur: 0.12 }
-      ];
-
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      const ctx = new AC();
+      const notas = [{ freq: 880, start: 0, dur: 0.08 }, { freq: 1318.5, start: 0.09, dur: 0.12 }];
       notas.forEach(nota => {
         const osc = ctx.createOscillator();
         const gain = ctx.createGain();
@@ -128,69 +103,51 @@
         osc.frequency.value = nota.freq;
         osc.connect(gain);
         gain.connect(ctx.destination);
-
         const t = ctx.currentTime + nota.start;
         gain.gain.setValueAtTime(0, t);
         gain.gain.linearRampToValueAtTime(0.15, t + 0.01);
         gain.gain.exponentialRampToValueAtTime(0.001, t + nota.dur);
-
         osc.start(t);
         osc.stop(t + nota.dur);
       });
-
       setTimeout(() => ctx.close(), 500);
-    } catch (e) {
-      log('Error reproduciendo sonido: ' + e.message);
-    }
+    } catch (e) {}
   }
 
   function reproducirSonidoError() {
     if (!sonidoActivo) return;
     try {
-      const AudioContext = window.AudioContext || window.webkitAudioContext;
-      if (!AudioContext) return;
-      const ctx = new AudioContext();
-
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      const ctx = new AC();
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.type = 'sine';
       osc.frequency.value = 220;
       osc.connect(gain);
       gain.connect(ctx.destination);
-
       const t = ctx.currentTime;
       gain.gain.setValueAtTime(0.15, t);
       gain.gain.exponentialRampToValueAtTime(0.001, t + 0.25);
-
       osc.start(t);
       osc.stop(t + 0.25);
-
       setTimeout(() => ctx.close(), 500);
     } catch (e) {}
   }
 
-  function vibrarExito() {
-    if (!sonidoActivo) return;
-    if ('vibrate' in navigator) {
-      navigator.vibrate([60, 40, 100]);
-    }
-  }
+  function vibrarExito() { if (sonidoActivo && 'vibrate' in navigator) navigator.vibrate([60, 40, 100]); }
+  function vibrarError() { if (sonidoActivo && 'vibrate' in navigator) navigator.vibrate([200, 100, 200]); }
 
-  function vibrarError() {
-    if (!sonidoActivo) return;
-    if ('vibrate' in navigator) {
-      navigator.vibrate([200, 100, 200]);
-    }
-  }
-
-  // ==========================================
-  // TEMA CLARO / OSCURO
-  // ==========================================
+  // TEMA
   function aplicarTema(tema) {
     if (tema === 'light') {
       document.documentElement.setAttribute('data-theme', 'light');
+      const meta = document.querySelector('meta[name="theme-color"]');
+      if (meta) meta.setAttribute('content', '#f7f8fa');
     } else {
       document.documentElement.removeAttribute('data-theme');
+      const meta = document.querySelector('meta[name="theme-color"]');
+      if (meta) meta.setAttribute('content', '#08090d');
     }
     localStorage.setItem(TEMA_KEY, tema);
   }
@@ -198,7 +155,6 @@
   function inicializarTema() {
     const guardado = localStorage.getItem(TEMA_KEY) || 'dark';
     aplicarTema(guardado);
-
     if (btnTema) {
       btnTema.addEventListener('click', () => {
         const actual = document.documentElement.getAttribute('data-theme');
@@ -208,26 +164,24 @@
     }
   }
 
-  // ==========================================
   // DETECCIÓN DE PAÍS
-  // ==========================================
   function detectarPaisDelTexto(texto) {
     if (!texto) return null;
     if (typeof DNIParser !== 'undefined' && DNIParser.esDeEstePais(texto)) return 'arg';
     if (typeof ParsersMundo !== 'undefined' && ParsersMundo.detectarPais) {
-      const detectado = ParsersMundo.detectarPais(texto);
-      if (detectado) return detectado;
+      const d = ParsersMundo.detectarPais(texto);
+      if (d) return d;
     }
     return null;
   }
 
   function nombrePaisDesdeCodigo(codigo) {
-    const nombres = {
+    const n = {
       arg: 'Argentina', chl: 'Chile', ury: 'Uruguay', pry: 'Paraguay',
       per: 'Perú', bol: 'Bolivia', col: 'Colombia', ecu: 'Ecuador',
       ven: 'Venezuela', bra: 'Brasil'
     };
-    return nombres[codigo] || codigo;
+    return n[codigo] || codigo;
   }
 
   function destacarChipPais(codigo) {
@@ -240,9 +194,6 @@
     });
   }
 
-  // ==========================================
-  // MODAL DE ERROR
-  // ==========================================
   function mostrarErrorDocumento(titulo, mensajeHtml) {
     const overlay = document.createElement('div');
     overlay.className = 'modal';
@@ -268,47 +219,37 @@
       </div>
     `;
     document.body.appendChild(overlay);
-
     const cerrar = () => overlay.remove();
     overlay.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', cerrar));
     overlay.addEventListener('click', (e) => { if (e.target === overlay) cerrar(); });
   }
 
-  // ==========================================
   // CÁMARA
-  // ==========================================
   async function iniciarCamara() {
     if (stream) return;
-
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       mostrarErrorCamara('Este navegador no permite acceder a la cámara.');
       setStatus('Sin cámara', 'error');
       return;
     }
-
-    const configuraciones = [
+    const configs = [
       { video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false },
       { video: { facingMode: 'environment' }, audio: false },
       { video: { facingMode: { ideal: 'user' } }, audio: false },
       { video: true, audio: false }
     ];
-
     let ultimoError = null;
-
-    for (let i = 0; i < configuraciones.length; i++) {
+    for (let i = 0; i < configs.length; i++) {
       try {
-        log(`🎥 Intento ${i + 1}/${configuraciones.length}…`);
         setStatus('Iniciando cámara…');
-        stream = await navigator.mediaDevices.getUserMedia(configuraciones[i]);
-        log(`✅ Stream OK con config ${i + 1}`);
+        stream = await navigator.mediaDevices.getUserMedia(configs[i]);
+        log('✅ Stream OK config ' + (i + 1));
         break;
       } catch (err) {
         ultimoError = err;
-        log(`❌ Config ${i + 1} falló: ${err.name}`);
         stream = null;
       }
     }
-
     if (!stream) {
       let msg = 'No se pudo acceder a la cámara.';
       if (ultimoError) {
@@ -320,7 +261,6 @@
       setStatus('Error cámara', 'error');
       return;
     }
-
     try {
       video.srcObject = stream;
       video.hidden = false;
@@ -328,26 +268,16 @@
       video.setAttribute('playsinline', '');
       video.setAttribute('muted', '');
       video.muted = true;
-
-      try {
-        await video.play();
-      } catch (playErr) {
-        setTimeout(async () => {
-          try { await video.play(); } catch (e) {}
-        }, 500);
+      try { await video.play(); } catch (e) {
+        setTimeout(async () => { try { await video.play(); } catch (e) {} }, 500);
       }
-
       await new Promise((resolve) => {
         if (video.videoWidth > 0) return resolve();
         const check = setInterval(() => {
-          if (video.videoWidth > 0) {
-            clearInterval(check);
-            resolve();
-          }
+          if (video.videoWidth > 0) { clearInterval(check); resolve(); }
         }, 100);
         setTimeout(() => { clearInterval(check); resolve(); }, 3000);
       });
-
       ocultarErrorCamara();
       if (img) img.hidden = true;
       if (scanFrame) scanFrame.classList.add('activo');
@@ -356,15 +286,12 @@
       if (btnRepetir) btnRepetir.hidden = true;
       if (estado) estado.textContent = 'Apuntá al código del documento.';
       setStatus('Cámara activa', 'active');
-
       trackActual = stream.getVideoTracks()[0];
       const caps = trackActual.getCapabilities ? trackActual.getCapabilities() : {};
       flashSoportado = !!caps.torch;
       if (flashSoportado && btnFlash) btnFlash.classList.add('activo');
-
       iniciarEscaneoContinuo();
     } catch (err) {
-      log('❌ Error asignando video: ' + err.message);
       mostrarErrorCamara('Error al mostrar el video.');
       setStatus('Error', 'error');
     }
@@ -372,10 +299,7 @@
 
   function detenerCamara() {
     if (stopScan) { stopScan(); stopScan = null; }
-    if (stream) {
-      stream.getTracks().forEach(t => t.stop());
-      stream = null;
-    }
+    if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
     trackActual = null;
     flashEncendido = false;
     if (btnFlash) btnFlash.classList.remove('encendido', 'activo');
@@ -384,10 +308,8 @@
   function iniciarEscaneoContinuo() {
     if (stopScan) stopScan();
     if (escaneoEstado) escaneoEstado.textContent = '🔍 Buscando código…';
-
     stopScan = DNIScanner.escanearContinuo(
-      video,
-      canvas,
+      video, canvas,
       (texto) => exitoEscaneo(texto),
       () => {
         if (escaneoEstado) escaneoEstado.textContent = '⏱ No se detectó. Acercate más.';
@@ -406,24 +328,19 @@
       flashEncendido = false;
       if (btnFlash) btnFlash.classList.remove('encendido');
     }
-
     const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
     if (img) { img.src = dataUrl; img.hidden = false; }
     video.hidden = true;
-
     if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
     trackActual = null;
 
     const paisDelDocumento = detectarPaisDelTexto(texto);
     const paisElegidoNombre = nombrePaisDesdeCodigo(paisSeleccionado);
 
-    // 🔴 Documento de otro país
     if (paisDelDocumento && paisDelDocumento !== paisSeleccionado) {
       const nombreDetectado = nombrePaisDesdeCodigo(paisDelDocumento);
-      mostrarErrorDocumento(
-        'Documento incorrecto',
-        `Elegiste <strong>${paisElegidoNombre}</strong> pero este documento parece ser de <strong>${nombreDetectado}</strong>.<br><br>Cambiá el país en el selector de arriba y volvé a escanear.`
-      );
+      mostrarErrorDocumento('Documento incorrecto',
+        `Elegiste <strong>${paisElegidoNombre}</strong> pero este documento parece ser de <strong>${nombreDetectado}</strong>.<br><br>Cambiá el país en el selector de arriba y volvé a escanear.`);
       if (estado) { estado.textContent = `⚠️ Este documento es de ${nombreDetectado}`; estado.classList.add('error'); estado.classList.remove('ok'); }
       if (escaneoEstado) escaneoEstado.textContent = '';
       setStatus('Documento incorrecto', 'error');
@@ -434,7 +351,6 @@
       return;
     }
 
-    // Parsear con el parser del país elegido
     let datos = null;
     if (paisSeleccionado === 'arg') {
       datos = DNIParser.parsear(texto);
@@ -444,16 +360,12 @@
 
     if (!datos || (!datos.dni && !datos.numero && !datos.apellido && !datos.nombre)) {
       if (paisDelDocumento) {
-        const nombreDetectado = nombrePaisDesdeCodigo(paisDelDocumento);
-        mostrarErrorDocumento(
-          'Documento no reconocido',
-          `No pudimos leer este documento como uno de ${paisElegidoNombre}. Parece ser de ${nombreDetectado}.`
-        );
+        const nd = nombrePaisDesdeCodigo(paisDelDocumento);
+        mostrarErrorDocumento('Documento no reconocido',
+          `No pudimos leer este documento como uno de ${paisElegidoNombre}. Parece ser de ${nd}.`);
       } else {
-        mostrarErrorDocumento(
-          'Documento no reconocido',
-          `No pudimos interpretar este código como un documento de ${paisElegidoNombre}. Verificá que sea el documento correcto.`
-        );
+        mostrarErrorDocumento('Documento no reconocido',
+          `No pudimos interpretar este código como un documento de ${paisElegidoNombre}.`);
       }
       if (estado) { estado.textContent = '⚠️ No se pudieron extraer datos'; estado.classList.add('error'); estado.classList.remove('ok'); }
       if (escaneoEstado) escaneoEstado.textContent = 'Texto: ' + texto.substring(0, 60);
@@ -464,7 +376,6 @@
       return;
     }
 
-    // ✅ Todo OK
     render(datos);
     if (estado) {
       estado.textContent = '✓ ' + (datos.nombreCompleto || datos.dni || datos.numero || 'Documento');
@@ -478,27 +389,23 @@
     vibrarExito();
   }
 
-  // ==========================================
   // RENDER
-  // ==========================================
   function setTexto(id, valor) {
     const el = document.getElementById(id);
     if (!el) return;
     el.textContent = (valor === null || valor === undefined || valor === '') ? '—' : String(valor);
     el.classList.remove('ok', 'err');
   }
-
-  function setBool(id, valor, textoSi, textoNo) {
+  function setBool(id, valor, sSi, sNo) {
     const el = document.getElementById(id);
     if (!el) return;
-    if (valor === true) { el.textContent = textoSi; el.classList.add('ok'); el.classList.remove('err'); }
-    else if (valor === false) { el.textContent = textoNo; el.classList.add('err'); el.classList.remove('ok'); }
+    if (valor === true) { el.textContent = sSi; el.classList.add('ok'); el.classList.remove('err'); }
+    else if (valor === false) { el.textContent = sNo; el.classList.add('err'); el.classList.remove('ok'); }
     else { el.textContent = '—'; el.classList.remove('ok', 'err'); }
   }
 
   function render(d) {
     ultimoResultado = d;
-
     const esChile = d.pais === 'CHL';
     const esUruguay = d.pais === 'URY';
     const esParaguay = d.pais === 'PRY';
@@ -506,23 +413,17 @@
 
     if (labelNumero) {
       if (esChile) labelNumero.textContent = 'RUN';
-      else if (esUruguay) labelNumero.textContent = 'Número de CI';
-      else if (esParaguay) labelNumero.textContent = 'Número de CI';
+      else if (esUruguay || esParaguay) labelNumero.textContent = 'Número de CI';
       else if (esBrasil) labelNumero.textContent = 'Número de pasaporte';
       else labelNumero.textContent = 'Número de DNI';
     }
-
     if (badgePais) {
-      const codigoPais = (d.pais || 'ARG').toLowerCase();
-      badgePais.textContent = BANDERAS[codigoPais] || '📄';
+      const cp = (d.pais || 'ARG').toLowerCase();
+      badgePais.textContent = BANDERAS[cp] || '📄';
     }
-
     if (resultPais) {
-      resultPais.textContent = d.paisNombre
-        ? `Datos extraídos · ${d.paisNombre}`
-        : 'Datos extraídos del documento';
+      resultPais.textContent = d.paisNombre ? `Datos extraídos · ${d.paisNombre}` : 'Datos extraídos del documento';
     }
-
     if (badgeMetodo) badgeMetodo.textContent = (d.metodo || 'código').toUpperCase();
 
     setTexto('r-dni', d.dni || d.numero || null);
@@ -544,9 +445,7 @@
     setTexto('r-pais', d.pais || '—');
     setTexto('r-domicilio', d.domicilio);
 
-    const numValido = d.numeroValido != null
-      ? d.numeroValido
-      : (d.dni ? /^\d{7,8}$/.test(d.dni) : null);
+    const numValido = d.numeroValido != null ? d.numeroValido : (d.dni ? /^\d{7,8}$/.test(d.dni) : null);
     setBool('r-val-dni', numValido, '✅ Válido', '❌ Inválido');
     setBool('r-val-cuil', d.cuil ? Validators.validarCUIL(d.cuil) : null, '✅ Válido', '❌ Inválido');
     setTexto('r-val-mrz', d.metodo === 'mrz' ? 'Sin verificar' : '—');
@@ -558,9 +457,7 @@
     }
   }
 
-  // ==========================================
   // COPIAR / DESCARGAR
-  // ==========================================
   function datosComoTexto(d) {
     if (!d) return '';
     return [
@@ -617,26 +514,21 @@
     mostrarToast('✓ JSON descargado', 'success');
   }
 
-  // ==========================================
   // HISTORIAL
-  // ==========================================
   function leerHistorial() {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       return raw ? JSON.parse(raw) : [];
     } catch (e) { return []; }
   }
-
   function escribirHistorial(arr) {
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(arr)); } catch (e) {}
   }
-
   function actualizarContadorHistorial() {
     const arr = leerHistorial();
     if (historialCount) historialCount.textContent = arr.length;
     if (btnHistorial) btnHistorial.style.display = arr.length > 0 ? 'flex' : 'none';
   }
-
   function guardarEnHistorial() {
     if (!ultimoResultado) return;
     const arr = leerHistorial();
@@ -646,7 +538,6 @@
     actualizarContadorHistorial();
     mostrarToast('✓ Guardado en historial', 'success');
   }
-
   function renderHistorial() {
     if (!historialLista) return;
     const arr = leerHistorial();
@@ -657,24 +548,20 @@
     historialLista.innerHTML = arr.map(item => {
       const d = item.datos;
       const fecha = new Date(item.fecha).toLocaleString('es-AR', {
-        day: '2-digit', month: '2-digit', year: 'numeric',
-        hour: '2-digit', minute: '2-digit'
+        day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit'
       });
       const num = d.dni || d.numero || '—';
-      return `
-        <div class="historial-item" data-id="${item.id}">
-          <div class="historial-info">
-            <div class="historial-nombre">${d.nombreCompleto || 'Sin nombre'}</div>
-            <div class="historial-meta">${num} · ${d.paisNombre || ''} · ${fecha}</div>
-          </div>
-          <div class="historial-actions">
-            <button class="historial-btn" data-action="ver" data-id="${item.id}">👁</button>
-            <button class="historial-btn delete" data-action="borrar" data-id="${item.id}">✕</button>
-          </div>
+      return `<div class="historial-item" data-id="${item.id}">
+        <div class="historial-info">
+          <div class="historial-nombre">${d.nombreCompleto || 'Sin nombre'}</div>
+          <div class="historial-meta">${num} · ${d.paisNombre || ''} · ${fecha}</div>
         </div>
-      `;
+        <div class="historial-actions">
+          <button class="historial-btn" data-action="ver" data-id="${item.id}">👁</button>
+          <button class="historial-btn delete" data-action="borrar" data-id="${item.id}">✕</button>
+        </div>
+      </div>`;
     }).join('');
-
     historialLista.querySelectorAll('[data-action]').forEach(btn => {
       btn.addEventListener('click', () => {
         const id = Number(btn.dataset.id);
@@ -689,13 +576,10 @@
       });
     });
   }
-
   function abrirHistorial() { renderHistorial(); if (modalHistorial) modalHistorial.hidden = false; }
   function cerrarHistorial() { if (modalHistorial) modalHistorial.hidden = true; }
 
-  // ==========================================
   // SUBIR IMAGEN
-  // ==========================================
   async function procesarImagen(file) {
     const reader = new FileReader();
     reader.onload = async (e) => {
@@ -720,17 +604,13 @@
           vibrarError();
           return;
         }
-
         const paisDelDocumento = detectarPaisDelTexto(texto);
         const paisElegidoNombre = nombrePaisDesdeCodigo(paisSeleccionado);
-
         if (paisDelDocumento && paisDelDocumento !== paisSeleccionado) {
-          const nombreDetectado = nombrePaisDesdeCodigo(paisDelDocumento);
-          mostrarErrorDocumento(
-            'Documento incorrecto',
-            `Elegiste <strong>${paisElegidoNombre}</strong> pero este documento parece ser de <strong>${nombreDetectado}</strong>.`
-          );
-          if (estado) { estado.textContent = `⚠️ Este documento es de ${nombreDetectado}`; estado.classList.add('error'); }
+          const nd = nombrePaisDesdeCodigo(paisDelDocumento);
+          mostrarErrorDocumento('Documento incorrecto',
+            `Elegiste <strong>${paisElegidoNombre}</strong> pero este documento parece ser de <strong>${nd}</strong>.`);
+          if (estado) { estado.textContent = `⚠️ Este documento es de ${nd}`; estado.classList.add('error'); }
           setStatus('Documento incorrecto', 'error');
           if (btnRepetir) btnRepetir.hidden = false;
           destacarChipPais(paisDelDocumento);
@@ -738,13 +618,9 @@
           vibrarError();
           return;
         }
-
         let datos = null;
-        if (paisSeleccionado === 'arg') {
-          datos = DNIParser.parsear(texto);
-        } else {
-          datos = ParsersMundo.parsear(paisSeleccionado, texto);
-        }
+        if (paisSeleccionado === 'arg') datos = DNIParser.parsear(texto);
+        else datos = ParsersMundo.parsear(paisSeleccionado, texto);
 
         if (datos && (datos.dni || datos.numero || datos.apellido || datos.nombre)) {
           render(datos);
@@ -760,11 +636,8 @@
           vibrarExito();
           return;
         }
-
-        mostrarErrorDocumento(
-          'Documento no reconocido',
-          `No pudimos interpretar este código como un documento de ${paisElegidoNombre}.`
-        );
+        mostrarErrorDocumento('Documento no reconocido',
+          `No pudimos interpretar este código como un documento de ${paisElegidoNombre}.`);
         if (estado) { estado.textContent = '⚠️ No se pudieron extraer datos'; estado.classList.add('error'); }
         setStatus('Sin datos', 'error');
         if (btnRepetir) btnRepetir.hidden = false;
@@ -776,29 +649,22 @@
     reader.readAsDataURL(file);
   }
 
-  // ==========================================
   // SELECTOR DE PAÍS
-  // ==========================================
   function inicializarSelectorPais() {
     const chips = document.querySelectorAll('.country-chip[data-country]');
     if (!chips.length) return;
-
     chips.forEach(chip => {
       chip.classList.toggle('active', chip.dataset.country === paisSeleccionado);
     });
-
     chips.forEach(chip => {
       chip.addEventListener('click', () => {
         if (chip.disabled) return;
         paisSeleccionado = chip.dataset.country;
         localStorage.setItem(PAIS_KEY, paisSeleccionado);
         chips.forEach(c => c.classList.toggle('active', c === chip));
-
         const nombrePais = chip.querySelector('.chip-name')?.textContent || '';
         mostrarToast(`País: ${nombrePais}`, 'success');
-
         if (resultado) resultado.hidden = true;
-
         if (!stream && !img.hidden && img.src) {
           img.hidden = true;
           img.src = '';
@@ -809,12 +675,9 @@
     });
   }
 
-  // ==========================================
   // EVENTOS
-  // ==========================================
   if (btnCamara) btnCamara.addEventListener('click', iniciarCamara);
   if (btnRetryCamara) btnRetryCamara.addEventListener('click', iniciarCamara);
-
   if (btnRepetir) {
     btnRepetir.addEventListener('click', async () => {
       if (resultado) resultado.hidden = true;
@@ -826,7 +689,6 @@
       await iniciarCamara();
     });
   }
-
   if (btnFlash) {
     btnFlash.addEventListener('click', async () => {
       if (!trackActual || !flashSoportado) return;
@@ -837,7 +699,6 @@
       } catch (e) {}
     });
   }
-
   if (btnUpload) btnUpload.addEventListener('click', () => fileInput.click());
   if (fileInput) {
     fileInput.addEventListener('change', (e) => {
@@ -847,7 +708,6 @@
       fileInput.value = '';
     });
   }
-
   if (btnCopiar) btnCopiar.addEventListener('click', copiarDatos);
   if (btnDescargar) btnDescargar.addEventListener('click', descargarJSON);
   if (btnGuardarHistorial) btnGuardarHistorial.addEventListener('click', guardarEnHistorial);
@@ -867,29 +727,20 @@
       if (e.target === modalHistorial) cerrarHistorial();
     });
   }
-
   window.addEventListener('beforeunload', () => {
     if (stream) stream.getTracks().forEach(t => t.stop());
     if (stopScan) stopScan();
   });
 
-  // ==========================================
-  // SERVICE WORKER
-  // ==========================================
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
       navigator.serviceWorker.register('sw.js').catch(() => {});
     });
   }
 
-  // ==========================================
-  // INIT
-  // ==========================================
   inicializarTema();
   actualizarContadorHistorial();
   inicializarSelectorPais();
-  log('=== Iniciando ===');
-  log('País seleccionado: ' + paisSeleccionado);
 
   setTimeout(iniciarCamara, 300);
 })();
