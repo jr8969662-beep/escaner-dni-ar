@@ -115,7 +115,7 @@
     return null;
   }
 
-  function nombrePaisDesdeCodigo(codigo) {
+    function nombrePaisDesdeCodigo(codigo) {
     const nombres = {
       arg: 'Argentina',
       chl: 'Chile',
@@ -124,7 +124,9 @@
       per: 'Perú',
       bol: 'Bolivia',
       col: 'Colombia',
-      ecu: 'Ecuador'
+      ecu: 'Ecuador',
+      ven: 'Venezuela',
+      bra: 'Brasil'
     };
     return nombres[codigo] || codigo;
   }
