@@ -955,3 +955,86 @@ body {
   border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover { background: #3a4050; }
+
+/* ============================================================
+   TEMA CLARO
+   ============================================================ */
+[data-theme="light"] {
+  --bg: #f7f8fa;
+  --bg-elevated: #ffffff;
+  --surface: #ffffff;
+  --surface-hover: #f0f2f5;
+  --surface-2: #e8ebf0;
+  --border: #e1e4ea;
+  --border-strong: #c9cfd9;
+  --text: #0f1116;
+  --text-secondary: #4a5260;
+  --text-tertiary: #7a8494;
+  --accent: #3b6fff;
+  --accent-hover: #2a5aee;
+  --accent-subtle: rgba(59, 111, 255, 0.1);
+  --accent-glow: rgba(59, 111, 255, 0.25);
+  --success: #059669;
+  --success-subtle: rgba(5, 150, 105, 0.1);
+  --danger: #dc2626;
+  --danger-subtle: rgba(220, 38, 38, 0.1);
+  --warning: #d97706;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.06);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.08);
+  --shadow-xl: 0 16px 40px rgba(0, 0, 0, 0.1);
+}
+
+[data-theme="light"] body {
+  background: var(--bg);
+  color: var(--text);
+}
+
+[data-theme="light"] .app-header {
+  background: rgba(255, 255, 255, 0.9);
+}
+
+[data-theme="light"] .camera-viewport {
+  background: #1a1a1a;
+}
+
+[data-theme="light"] .country-chip.active {
+  box-shadow: 0 0 0 1px var(--accent), 0 2px 8px var(--accent-glow);
+}
+
+[data-theme="light"] .main-number-block {
+  background: linear-gradient(135deg, var(--accent-subtle) 0%, rgba(124, 58, 237, 0.05) 100%);
+  border-color: rgba(59, 111, 255, 0.2);
+}
+
+[data-theme="light"] .raw-data pre {
+  background: #f0f2f5;
+}
+
+[data-theme="light"] .camera-hint {
+  background: rgba(0, 0, 0, 0.8);
+  color: #fff;
+}
+
+[data-theme="light"] .icon-btn {
+  color: #fff;
+}
+
+[data-theme="light"] .toast {
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
+}
+
+[data-theme="light"] ::-webkit-scrollbar-thumb {
+  background: #c9cfd9;
+}
+[data-theme="light"] ::-webkit-scrollbar-thumb:hover {
+  background: #a8b0be;
+}
+
+/* Botón de tema: rotación del ícono al cambiar */
+#icon-tema {
+  transition: transform 0.3s ease;
+}
+[data-theme="light"] #icon-tema {
+  transform: rotate(180deg);
+}
