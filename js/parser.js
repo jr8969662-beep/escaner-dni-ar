@@ -1,5 +1,13 @@
+/**
+ * Parser DNI argentino - Extracción completa
+ * Soporta: QR nuevo DNI, PDF417 viejo, MRZ del dorso
+ */
+
 const DNIParser = (() => {
 
+  // ==========================================
+  // HELPERS COMUNES
+  // ==========================================
   function fechaDMYtoISO(fechaStr) {
     if (!fechaStr) return null;
     const limpio = String(fechaStr).trim();
@@ -56,10 +64,56 @@ const DNIParser = (() => {
     return venc > new Date();
   }
 
-  // ============ QR NUEVO DNI ============
+  // ==========================================
+  // DETECCIÓN DE PAÍS - ¿ES ARGENTINO?
+  // ==========================================
+  function esDeEstePais(texto) {
+    if (!texto) return false;
+    const t = String(texto).trim();
+
+    // 🚫 Señales fuertes de OTROS países → NO es argentino
+    if (/IDURY|IDPRY|IDPER|IDBOL|IDCOL|IDECU|IDCHL/i.test(t)) return false;
+
+    // 🚫 Chile: nro trámite con muchos ceros al inicio
+    if (/^0{4,}\d+@/.test(t)) return false;
+
+    // ✅ Señales explícitas argentinas
+    if (/IDARG/i.test(t.replace(/\s/g, ''))) return true;
+    if (/@ARG@|\bARGENTINA\b/.test(t)) return true;
+
+    // ✅ MRZ argentina: empieza con IDARG
+    if (/^IDARG/i.test(t.replace(/\s/g, '').substring(0, 6))) return true;
+
+    // ✅ QR nuevo del DNI argentino
+    const partes = t.split('@').map(p => p.trim());
+    if (partes.length >= 7) {
+      const [nroTramite, apellido, nombre, sexo, dni] = partes;
+      // Nro trámite argentino: 10-14 dígitos, NO empieza con 5+ ceros
+      if (/^\d{10,14}$/.test(nroTramite) &&
+          !/^0{4,}/.test(nroTramite) &&
+          /^[MF]$/i.test(sexo) &&
+          /^\d{7,8}$/.test(dni)) {
+        return true;
+      }
+    }
+
+    // ✅ PDF417 viejo argentino: señales típicas
+    if (/EJEMPLAR|TRAMITE|TRÁMITE/i.test(t) && /\b\d{7,8}\b/.test(t)) {
+      return true;
+    }
+
+    return false;
+  }
+
+  // ==========================================
+  // PARSER QR DEL NUEVO DNI
+  // ==========================================
   function parsearQR(texto) {
     const contenido = String(texto || '').trim().replace(/^\uFEFF/, '');
     if (!contenido) return null;
+
+    // 🚫 Rechazar si es de otro país
+    if (!esDeEstePais(contenido)) return null;
 
     const partes = contenido.split('@').map(p => p.trim());
     if (partes.length < 7) return null;
@@ -70,6 +124,9 @@ const DNIParser = (() => {
     ] = partes;
 
     if (!/^\d{7,8}$/.test(dni)) return null;
+    if (!/^\d{10,14}$/.test(nroTramite)) return null;
+    if (/^0{4,}/.test(nroTramite)) return null;
+    if (!/^[MF]$/i.test(sexo)) return null;
 
     let cuil = null;
     for (const campo of resto) {
@@ -105,9 +162,15 @@ const DNIParser = (() => {
     };
   }
 
-  // ============ PDF417 ============
+  // ==========================================
+  // PARSER PDF417 (DNI viejo)
+  // ==========================================
   function parsearPDF417(texto) {
     const contenido = String(texto || '');
+
+    // 🚫 Rechazar si es de otro país
+    if (!esDeEstePais(contenido)) return null;
+
     const partes = contenido.split(/[@\r\n]+/).map(p => p.trim()).filter(Boolean);
 
     const datos = {
@@ -171,7 +234,9 @@ const DNIParser = (() => {
     return datos;
   }
 
-  // ============ MRZ ============
+  // ==========================================
+  // MRZ
+  // ==========================================
   function esMRZ(texto) {
     const limpio = String(texto || '').toUpperCase();
     const tieneID = /ID[A-Z]{3}\d{6,}/.test(limpio.replace(/[\s<]/g, ''));
@@ -180,6 +245,9 @@ const DNIParser = (() => {
   }
 
   function parsearMRZ(texto) {
+    // 🚫 Solo aceptar MRZ argentina
+    if (!/IDARG/i.test(String(texto).replace(/\s/g, ''))) return null;
+
     const lineasLimp = String(texto).split(/[\n\r]+/)
       .map(l => l.toUpperCase().replace(/[^A-Z0-9<]/g, ''))
       .filter(l => l.length >= 20);
@@ -195,8 +263,8 @@ const DNIParser = (() => {
     lineasMRZ = lineasMRZ.map(l => (l + '<'.repeat(30)).substring(0, 30));
 
     let [l1, l2, l3] = lineasMRZ;
-    if (!/^ID/.test(l1)) {
-      const idx = lineasMRZ.findIndex(l => /^ID[A-Z]{3}/.test(l));
+    if (!/^IDARG/.test(l1)) {
+      const idx = lineasMRZ.findIndex(l => /^IDARG/.test(l));
       if (idx > 0) {
         [l1, l2, l3] = [lineasMRZ[idx], lineasMRZ[idx + 1] || '', lineasMRZ[idx + 2] || ''];
       }
@@ -211,14 +279,14 @@ const DNIParser = (() => {
       fechaNacimiento: fechaYYMMDDtoISO(l2.substring(0, 6)),
       fechaEmision: null,
       fechaVencimiento: fechaYYMMDDtoISO(l2.substring(8, 14)),
-      edad: null, nacionalidad: null, lugarNacimiento: null, domicilio: null,
+      edad: null, nacionalidad: 'ARGENTINA', lugarNacimiento: null, domicilio: null,
       tramite: null, ejemplar: null, cuil: null,
-      tipoDocumento: 'DNI', pais: l1.substring(2, 5) || null,
+      tipoDocumento: 'DNI', pais: 'ARG',
       esNuevoDNI: true, vigente: null
     };
 
     const nac = l2.substring(15, 18).replace(/</g, '');
-    if (nac) datos.nacionalidad = nac === 'ARG' ? 'ARGENTINA' : nac;
+    if (nac && nac !== 'ARG') datos.nacionalidad = nac;
 
     const l3clean = l3.replace(/<+$/, '');
     const partes = l3clean.split('<<');
@@ -236,18 +304,36 @@ const DNIParser = (() => {
 
   function parsear(texto) {
     if (!texto) return null;
+
+    // 🚫 Rechazar si es de otro país conocido
+    if (/IDURY|IDPRY|IDPER|IDBOL|IDCOL|IDECU|IDCHL/i.test(texto)) return null;
+    if (/^0{4,}\d+@/.test(texto.trim())) return null;
+
+    // 1. QR
     const porQR = parsearQR(texto);
     if (porQR) return porQR;
-    if (esMRZ(texto)) {
+
+    // 2. MRZ argentina
+    if (esMRZ(texto) && /IDARG/i.test(texto.replace(/\s/g, ''))) {
       const porMRZ = parsearMRZ(texto);
       if (porMRZ) return porMRZ;
     }
+
+    // 3. PDF417 argentino
     const porPDF = parsearPDF417(texto);
     if (porPDF) return porPDF;
+
     return null;
   }
 
-  return { parsear, parsearQR, parsearPDF417, parsearMRZ, esMRZ };
+  return {
+    parsear,
+    parsearQR,
+    parsearPDF417,
+    parsearMRZ,
+    esMRZ,
+    esDeEstePais
+  };
 })();
 
 console.log('✅ parser.js cargado');
