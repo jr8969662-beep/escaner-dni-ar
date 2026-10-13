@@ -9,7 +9,6 @@
 <link rel="manifest" href="manifest.json">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%234f7cff'/%3E%3Crect x='20' y='25' width='60' height='50' rx='6' fill='none' stroke='white' stroke-width='4'/%3E%3Ccircle cx='35' cy='45' r='7' fill='white'/%3E%3Cpath d='M50 40h25M50 50h25M25 65h50' stroke='white' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E">
 
-<!-- Librerías externas -->
 <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.0/umd/index.min.js"></script>
 
@@ -33,6 +32,11 @@
       </div>
     </div>
     <div class="header-actions">
+      <button type="button" class="icon-action" id="btn-tema" title="Cambiar tema">
+        <svg id="icon-tema" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+        </svg>
+      </button>
       <button type="button" class="icon-action" id="btn-historial" title="Historial" style="display:none;">
         <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
@@ -50,7 +54,6 @@
 
 <main class="app-main">
 
-  <!-- SELECTOR DE PAÍS -->
   <section class="country-selector" id="country-selector">
     <div class="country-selector-head">
       <span class="country-selector-label">Documento a escanear</span>
@@ -101,7 +104,6 @@
     </div>
   </section>
 
-  <!-- CÁMARA -->
   <section class="card camera-card">
     <div class="camera-viewport" id="captura-dni">
       <video id="scan-video" autoplay playsinline muted></video>
@@ -155,9 +157,7 @@
     </div>
   </section>
 
-  <!-- RESULTADO -->
   <section class="card result-card" id="resultado" hidden>
-    <!-- Encabezado del resultado -->
     <div class="result-header">
       <div class="result-header-left">
         <div class="result-badge-pais" id="badge-pais">🇦🇷</div>
@@ -169,13 +169,11 @@
       <span class="badge" id="badge-metodo">—</span>
     </div>
 
-    <!-- NÚMERO PRINCIPAL (destacado) -->
     <div class="main-number-block">
       <span class="main-number-label" id="label-numero">Número de DNI</span>
       <div class="main-number-value" id="r-dni">—</div>
     </div>
 
-    <!-- DATOS PERSONALES -->
     <div class="group">
       <div class="group-title">
         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -195,7 +193,6 @@
       <div class="field"><span class="field-label">Lugar de nacimiento</span><span class="field-value" id="r-lugarNacimiento">—</span></div>
     </div>
 
-    <!-- DOCUMENTO -->
     <div class="group">
       <div class="group-title">
         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -215,7 +212,6 @@
       <div class="field"><span class="field-label">País emisor</span><span class="field-value" id="r-pais">—</span></div>
     </div>
 
-    <!-- DOMICILIO -->
     <div class="group">
       <div class="group-title">
         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -227,7 +223,6 @@
       <div class="field"><span class="field-label">Declarado</span><span class="field-value" id="r-domicilio">—</span></div>
     </div>
 
-    <!-- VALIDACIONES -->
     <div class="group">
       <div class="group-title">
         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -241,7 +236,6 @@
       <div class="field"><span class="field-label">Dígitos de control MRZ</span><span class="field-value" id="r-val-mrz">—</span></div>
     </div>
 
-    <!-- ACCIONES -->
     <div class="result-actions">
       <button type="button" class="btn btn-secondary btn-sm" id="btn-copiar">
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -273,7 +267,6 @@
 
 </main>
 
-<!-- MODAL HISTORIAL -->
 <div class="modal" id="modal-historial" hidden>
   <div class="modal-content">
     <div class="modal-header">
@@ -289,7 +282,6 @@
   </div>
 </div>
 
-<!-- TOAST -->
 <div class="toast" id="toast" hidden></div>
 
 <script src="js/validators.js"></script>
