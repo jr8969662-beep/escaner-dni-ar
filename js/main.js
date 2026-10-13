@@ -96,6 +96,84 @@
   }
 
   // ==========================================
+  // DETECCIÓN DE PAÍS
+  // ==========================================
+  function detectarPaisDelTexto(texto) {
+    if (!texto) return null;
+
+    // Probar parser argentino primero
+    if (typeof DNIParser !== 'undefined' && DNIParser.esDeEstePais(texto)) {
+      return 'arg';
+    }
+
+    // Probar parsers de otros países
+    if (typeof ParsersMundo !== 'undefined' && ParsersMundo.detectarPais) {
+      const detectado = ParsersMundo.detectarPais(texto);
+      if (detectado) return detectado;
+    }
+
+    return null;
+  }
+
+  function nombrePaisDesdeCodigo(codigo) {
+    const nombres = {
+      arg: 'Argentina',
+      chl: 'Chile',
+      ury: 'Uruguay',
+      pry: 'Paraguay',
+      per: 'Perú',
+      bol: 'Bolivia',
+      col: 'Colombia',
+      ecu: 'Ecuador'
+    };
+    return nombres[codigo] || codigo;
+  }
+
+  function destacarChipPais(codigo) {
+    const chips = document.querySelectorAll('.country-chip[data-country]');
+    chips.forEach(chip => {
+      if (chip.dataset.country === codigo && !chip.disabled) {
+        chip.style.animation = 'chipPulse 0.8s ease-in-out 3';
+        setTimeout(() => { chip.style.animation = ''; }, 2500);
+      }
+    });
+  }
+
+  // ==========================================
+  // MODAL DE ERROR
+  // ==========================================
+  function mostrarErrorDocumento(titulo, mensajeHtml) {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal';
+    overlay.style.display = 'flex';
+    overlay.style.zIndex = '300';
+    overlay.innerHTML = `
+      <div class="modal-content" style="max-width: 440px;">
+        <div class="modal-header">
+          <h2 style="display:flex;align-items:center;gap:10px;">
+            <span style="font-size:1.3rem;">⚠️</span>
+            <span>${titulo}</span>
+          </h2>
+          <button type="button" class="icon-btn-close" data-close>✕</button>
+        </div>
+        <div class="modal-body" style="padding: 20px 24px;">
+          <p style="font-size: 0.95rem; line-height: 1.65; color: var(--text-secondary); margin: 0;">
+            ${mensajeHtml}
+          </p>
+        </div>
+        <div class="modal-footer" style="justify-content: center;">
+          <button type="button" class="btn btn-primary" data-close style="min-width: 140px;">Entendido</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+
+    const cerrar = () => overlay.remove();
+    overlay.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', cerrar));
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) cerrar(); });
+  }
+
+  // ==========================================
   // CÁMARA
   // ==========================================
   async function iniciarCamara() {
@@ -237,21 +315,61 @@
     if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
     trackActual = null;
 
-    // 🔑 Elegir parser según país
-    const datos = paisSeleccionado === 'arg'
-      ? DNIParser.parsear(texto)
-      : ParsersMundo.parsear(paisSeleccionado, texto);
+    // ==========================================
+    // DETECCIÓN DE PAÍS
+    // ==========================================
+    const paisDelDocumento = detectarPaisDelTexto(texto);
+    const paisElegidoNombre = nombrePaisDesdeCodigo(paisSeleccionado);
 
-    log('🧩 Datos: ' + JSON.stringify(datos).substring(0, 120));
+    // 🔴 Si el documento es de OTRO país distinto al elegido
+    if (paisDelDocumento && paisDelDocumento !== paisSeleccionado) {
+      const nombreDetectado = nombrePaisDesdeCodigo(paisDelDocumento);
+      mostrarErrorDocumento(
+        'Documento incorrecto',
+        `Elegiste <strong>${paisElegidoNombre}</strong> pero este documento parece ser de <strong>${nombreDetectado}</strong>.<br><br>Cambiá el país en el selector de arriba y volvé a escanear.`
+      );
+      if (estado) { estado.textContent = `⚠️ Este documento es de ${nombreDetectado}`; estado.classList.add('error'); estado.classList.remove('ok'); }
+      if (escaneoEstado) escaneoEstado.textContent = '';
+      setStatus('Documento incorrecto', 'error');
+      if (btnRepetir) btnRepetir.hidden = false;
+      destacarChipPais(paisDelDocumento);
+      return;
+    }
 
+    // ==========================================
+    // PARSEAR CON EL PARSER DEL PAÍS ELEGIDO
+    // ==========================================
+    let datos = null;
+    if (paisSeleccionado === 'arg') {
+      datos = DNIParser.parsear(texto);
+    } else {
+      datos = ParsersMundo.parsear(paisSeleccionado, texto);
+    }
+
+    // 🔴 Si no se pudieron extraer datos
     if (!datos || (!datos.dni && !datos.numero && !datos.apellido && !datos.nombre)) {
-      if (estado) { estado.textContent = '⚠️ No se pudieron extraer datos'; estado.classList.add('error'); }
+      if (paisDelDocumento) {
+        const nombreDetectado = nombrePaisDesdeCodigo(paisDelDocumento);
+        mostrarErrorDocumento(
+          'Documento no reconocido',
+          `No pudimos leer este documento como uno de ${paisElegidoNombre}. Parece ser de ${nombreDetectado}. Verificá la selección de país.`
+        );
+      } else {
+        mostrarErrorDocumento(
+          'Documento no reconocido',
+          `No pudimos interpretar este código como un documento de ${paisElegidoNombre}. Verificá que sea el documento correcto y volvé a intentar.`
+        );
+      }
+      if (estado) { estado.textContent = '⚠️ No se pudieron extraer datos'; estado.classList.add('error'); estado.classList.remove('ok'); }
       if (escaneoEstado) escaneoEstado.textContent = 'Texto: ' + texto.substring(0, 60);
       setStatus('Sin datos', 'error');
       if (btnRepetir) btnRepetir.hidden = false;
       return;
     }
 
+    // ==========================================
+    // TODO OK: RENDERIZAR
+    // ==========================================
     render(datos);
     if (estado) {
       estado.textContent = '✓ ' + (datos.nombreCompleto || datos.dni || datos.numero || 'Documento');
@@ -286,14 +404,18 @@
 
     // Ajustes según país
     const esChile = d.pais === 'CHL';
-    if (labelNumero) labelNumero.textContent = esChile ? 'RUN' : 'Número de DNI';
-    if (resultPais) resultPais.textContent = d.paisNombre
-      ? `Datos extraídos · ${d.paisNombre}`
-      : 'Datos extraídos del documento';
+    const esUruguay = d.pais === 'URY';
+    if (labelNumero) {
+      labelNumero.textContent = esChile ? 'RUN' : esUruguay ? 'Número de CI' : 'Número de DNI';
+    }
+    if (resultPais) {
+      resultPais.textContent = d.paisNombre
+        ? `Datos extraídos · ${d.paisNombre}`
+        : 'Datos extraídos del documento';
+    }
 
     if (badgeMetodo) badgeMetodo.textContent = (d.metodo || 'código').toUpperCase();
 
-    // Número principal (DNI argentino o RUN chileno)
     setTexto('r-dni', d.dni || d.numero || null);
     setTexto('r-apellido', d.apellido);
     setTexto('r-nombre', d.nombre);
@@ -313,7 +435,6 @@
     setTexto('r-pais', d.pais || '—');
     setTexto('r-domicilio', d.domicilio);
 
-    // Validaciones
     const numValido = d.numeroValido != null
       ? d.numeroValido
       : (d.dni ? /^\d{7,8}$/.test(d.dni) : null);
@@ -481,28 +602,57 @@
         if (escaneoEstado) escaneoEstado.textContent = '🔍 Analizando…';
 
         const texto = await DNIScanner.escanearImagen(imageEl);
-
-        if (texto) {
-          const datos = paisSeleccionado === 'arg'
-            ? DNIParser.parsear(texto)
-            : ParsersMundo.parsear(paisSeleccionado, texto);
-
-          if (datos && (datos.dni || datos.numero || datos.apellido || datos.nombre)) {
-            render(datos);
-            if (estado) {
-              estado.textContent = '✓ ' + (datos.nombreCompleto || datos.dni || datos.numero);
-              estado.classList.remove('error');
-              estado.classList.add('ok');
-            }
-            if (escaneoEstado) escaneoEstado.textContent = '✅ Escaneo OK';
-            setStatus('Escaneo OK', 'active');
-            if (btnRepetir) btnRepetir.hidden = false;
-            return;
-          }
+        if (!texto) {
+          if (estado) { estado.textContent = '⚠️ No se detectó código'; estado.classList.add('error'); }
+          if (escaneoEstado) escaneoEstado.textContent = 'Probá con una imagen más nítida';
+          setStatus('Sin código', 'error');
+          if (btnRepetir) btnRepetir.hidden = false;
+          return;
         }
-        if (estado) { estado.textContent = '⚠️ No se detectó código'; estado.classList.add('error'); }
-        if (escaneoEstado) escaneoEstado.textContent = 'Probá con una imagen más nítida';
-        setStatus('Sin código', 'error');
+
+        // Detección estricta de país
+        const paisDelDocumento = detectarPaisDelTexto(texto);
+        const paisElegidoNombre = nombrePaisDesdeCodigo(paisSeleccionado);
+
+        if (paisDelDocumento && paisDelDocumento !== paisSeleccionado) {
+          const nombreDetectado = nombrePaisDesdeCodigo(paisDelDocumento);
+          mostrarErrorDocumento(
+            'Documento incorrecto',
+            `Elegiste <strong>${paisElegidoNombre}</strong> pero este documento parece ser de <strong>${nombreDetectado}</strong>.<br><br>Cambiá el país en el selector de arriba y volvé a intentar.`
+          );
+          if (estado) { estado.textContent = `⚠️ Este documento es de ${nombreDetectado}`; estado.classList.add('error'); }
+          setStatus('Documento incorrecto', 'error');
+          if (btnRepetir) btnRepetir.hidden = false;
+          destacarChipPais(paisDelDocumento);
+          return;
+        }
+
+        let datos = null;
+        if (paisSeleccionado === 'arg') {
+          datos = DNIParser.parsear(texto);
+        } else {
+          datos = ParsersMundo.parsear(paisSeleccionado, texto);
+        }
+
+        if (datos && (datos.dni || datos.numero || datos.apellido || datos.nombre)) {
+          render(datos);
+          if (estado) {
+            estado.textContent = '✓ ' + (datos.nombreCompleto || datos.dni || datos.numero);
+            estado.classList.remove('error');
+            estado.classList.add('ok');
+          }
+          if (escaneoEstado) escaneoEstado.textContent = '✅ Escaneo OK';
+          setStatus('Escaneo OK', 'active');
+          if (btnRepetir) btnRepetir.hidden = false;
+          return;
+        }
+
+        mostrarErrorDocumento(
+          'Documento no reconocido',
+          `No pudimos interpretar este código como un documento de ${paisElegidoNombre}.`
+        );
+        if (estado) { estado.textContent = '⚠️ No se pudieron extraer datos'; estado.classList.add('error'); }
+        setStatus('Sin datos', 'error');
         if (btnRepetir) btnRepetir.hidden = false;
       };
       imageEl.src = src;
@@ -517,7 +667,6 @@
     const chips = document.querySelectorAll('.country-chip[data-country]');
     if (!chips.length) return;
 
-    // Marcar activo el guardado
     chips.forEach(chip => {
       chip.classList.toggle('active', chip.dataset.country === paisSeleccionado);
     });
@@ -534,7 +683,6 @@
 
         if (resultado) resultado.hidden = true;
 
-        // Reiniciar la cámara si no está activa
         if (!stream && !img.hidden && img.src) {
           img.hidden = true;
           img.src = '';
