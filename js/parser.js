@@ -1,30 +1,30 @@
 /**
  * Parser DNI argentino - Extracción completa con detección estricta
- * Soporta: QR nuevo DNI, PDF417 viejo, MRZ del dorso
  * Rechaza documentos de otros países
  */
 
 const DNIParser = (() => {
 
   // ==========================================
-  // HELPERS COMUNES
+  // HELPERS
   // ==========================================
   function fechaDMYtoISO(fechaStr) {
     if (!fechaStr) return null;
     const limpio = String(fechaStr).trim();
     const m = limpio.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
     if (!m) return null;
-    let [, dd, mm, aa] = m;
+    const dd = m[1], mm = m[2];
+    let aa = m[3];
     let anio = aa;
     if (aa.length === 2) anio = parseInt(aa) > 50 ? '19' + aa : '20' + aa;
-    return `${anio}-${mm.padStart(2, '0')}-${dd.padStart(2, '0')}`;
+    return anio + '-' + mm.padStart(2, '0') + '-' + dd.padStart(2, '0');
   }
 
   function fechaYYMMDDtoISO(s) {
     if (!/^\d{6}$/.test(s)) return null;
     const yy = parseInt(s.substring(0, 2), 10);
     const yyyy = yy > 30 ? 1900 + yy : 2000 + yy;
-    return `${yyyy}-${s.substring(2, 4)}-${s.substring(4, 6)}`;
+    return yyyy + '-' + s.substring(2, 4) + '-' + s.substring(4, 6);
   }
 
   function normalizarSexo(s) {
@@ -65,79 +65,67 @@ const DNIParser = (() => {
     return venc > new Date();
   }
 
+  function esNombreValido(s) {
+    if (!s) return false;
+    // Letras ASCII + Latin-1 Supplement (acentos) + espacio
+    return /^[A-Za-z\u00C0-\u00FF\s]{2,}$/.test(s);
+  }
+
   // ==========================================
-  // 🚫 DETECCIÓN: ¿ES DE OTRO PAÍS?
+  // DETECCIÓN: ¿ES DE OTRO PAÍS?
   // ==========================================
   function esDeOtroPais(texto) {
     if (!texto) return false;
     const t = String(texto).trim();
 
-    // MRZ de otros países sudamericanos
     if (/IDURY|IDPRY|IDPER|IDBOL|IDCOL|IDECU|IDCHL|IDVEN|IDBRA/i.test(t)) return true;
-
-    // Chile: PDF417 con nro trámite empezando con 4+ ceros
     if (/^0{4,}\d+@/.test(t)) return true;
-
-    // Brasil: contiene BR seguido de 11 dígitos típicos
     if (/^BR\d{11}/i.test(t)) return true;
 
     return false;
   }
 
   // ==========================================
-  // ✅ DETECCIÓN: ¿ES ARGENTINO?
+  // DETECCIÓN: ¿ES ARGENTINO?
   // ==========================================
-    function esDeOtroPais(texto) {
+  function esDeEstePais(texto) {
     if (!texto) return false;
-    const t = String(texto).trim();
-
-    // MRZ de otros países sudamericanos
-    if (/IDURY|IDPRY|IDPER|IDBOL|IDCOL|IDECU|IDCH
-    // 🚫 Si es de otro país, NO es argentino
     if (esDeOtroPais(texto)) return false;
 
     const t = String(texto).trim();
     const tUpper = t.toUpperCase();
 
-    // ✅ Señales explícitas argentinas
     if (/IDARG/i.test(t.replace(/\s/g, ''))) return true;
-    if (/@ARG@|\bARGENTINA\b|\bARG\b/.test(tUpper)) return true;
+    if (tUpper.indexOf('@ARG@') >= 0) return true;
+    if (tUpper.indexOf('ARGENTINA') >= 0) return true;
 
-    // ✅ MRZ argentina: empieza con IDARG (buscando al inicio de una línea)
     const lineas = t.split(/[\n\r]+/);
-    for (const linea of lineas) {
-      if (/^IDARG/i.test(linea.replace(/\s/g, ''))) return true;
+    for (let i = 0; i < lineas.length; i++) {
+      if (/^IDARG/i.test(lineas[i].replace(/\s/g, ''))) return true;
     }
 
-    // ✅ QR nuevo del DNI argentino
-    // Formato: nroTramite@apellido@nombre@sexo@dni@ejemplar@...
-    if (t.includes('@')) {
-      const partes = t.split('@').map(p => p.trim());
+    if (t.indexOf('@') >= 0) {
+      const partes = t.split('@').map(function(p) { return p.trim(); });
       if (partes.length >= 7) {
-        const [nroTramite, apellido, nombre, sexo, dni] = partes;
+        const nroTramite = partes[0];
+        const apellido = partes[1];
+        const nombre = partes[2];
+        const sexo = partes[3];
+        const dni = partes[4];
 
-        // Nro trámite argentino: 10-14 dígitos
         const tramiteValido = /^\d{10,14}$/.test(nroTramite);
-        // Y NO empieza con 4+ ceros (eso es chileno)
         const noEsChileno = !/^0{4,}/.test(nroTramite);
-        // Sexo M o F
         const sexoValido = /^[MF]$/i.test(sexo);
-        // DNI: 7-8 dígitos
         const dniValido = /^\d{7,8}$/.test(dni);
-        // Apellido y nombre: solo letras
-        const apellidoValido = /^[A-ZÁÉÍÓÚÑa-záéíóúñ\s]{2,}$/.test(apellido);
-        const nombreValido = /^[A-ZÁÉÍÓÚÑa-záéíóúñ\s]{2,}$/.test(nombre);
 
-        if (tramiteValido && noEsChileno && sexoValido && dniValido && apellidoValido && nombreValido) {
+        if (tramiteValido && noEsChileno && sexoValido && dniValido &&
+            esNombreValido(apellido) && esNombreValido(nombre)) {
           return true;
         }
       }
     }
 
-    // ✅ PDF417 viejo argentino: contiene palabras clave típicas
-    if (/\bEJEMPLAR\b/i.test(t) && /\b\d{7,8}\b/.test(t)) {
-      return true;
-    }
+    if (/\bEJEMPLAR\b/i.test(t) && /\b\d{7,8}\b/.test(t)) return true;
 
     return false;
   }
@@ -148,31 +136,30 @@ const DNIParser = (() => {
   function parsearQR(texto) {
     const contenido = String(texto || '').trim().replace(/^\uFEFF/, '');
     if (!contenido) return null;
-
-    // 🚫 Rechazar si NO es argentino (validación estricta)
     if (!esDeEstePais(contenido)) return null;
 
-    const partes = contenido.split('@').map(p => p.trim());
+    const partes = contenido.split('@').map(function(p) { return p.trim(); });
     if (partes.length < 7) return null;
 
-    const [
-      nroTramite, apellido, nombre, sexo, dni, ejemplar,
-      fechaNacDMY, fechaEmisionDMY, ...resto
-    ] = partes;
+    const nroTramite = partes[0];
+    const apellido = partes[1];
+    const nombre = partes[2];
+    const sexo = partes[3];
+    const dni = partes[4];
+    const ejemplar = partes[5];
+    const fechaNacDMY = partes[6];
+    const fechaEmisionDMY = partes[7];
+    const resto = partes.slice(8);
 
-    // Validaciones estrictas del QR argentino
     if (!/^\d{7,8}$/.test(dni)) return null;
     if (!/^\d{10,14}$/.test(nroTramite)) return null;
     if (/^0{4,}/.test(nroTramite)) return null;
     if (!/^[MF]$/i.test(sexo)) return null;
-    if (!/^[A-ZÁÉÍÓÚÑa-záéíóúñ\s]{2,}$/.test(apellido)) return null;
-    if (!/^[A-ZÁÉÍÓÚÑa-záéíóúñ\s]{2,}$/.test(nombre)) return null;
-    if (!/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(fechaNacDMY)) return null;
 
     let cuil = null;
-    for (const campo of resto) {
-      const m = String(campo).match(/^(\d{2})[-\s]?(\d{8})[-\s]?(\d)$/);
-      if (m) { cuil = `${m[1]}-${m[2]}-${m[3]}`; break; }
+    for (let i = 0; i < resto.length; i++) {
+      const m = String(resto[i]).match(/^(\d{2})[-\s]?(\d{8})[-\s]?(\d)$/);
+      if (m) { cuil = m[1] + '-' + m[2] + '-' + m[3]; break; }
     }
 
     const fechaNacimiento = fechaDMYtoISO(fechaNacDMY);
@@ -184,7 +171,7 @@ const DNIParser = (() => {
       dni: dni,
       apellido: apellido || null,
       nombre: nombre || null,
-      nombreCompleto: `${apellido || ''} ${nombre || ''}`.trim() || null,
+      nombreCompleto: (apellido || '') + ' ' + (nombre || ''),
       sexo: normalizarSexo(sexo),
       fechaNacimiento: fechaNacimiento,
       fechaEmision: fechaEmision,
@@ -208,11 +195,9 @@ const DNIParser = (() => {
   // ==========================================
   function parsearPDF417(texto) {
     const contenido = String(texto || '');
-
-    // 🚫 Rechazar si NO es argentino
     if (!esDeEstePais(contenido)) return null;
 
-    const partes = contenido.split(/[@\r\n]+/).map(p => p.trim()).filter(Boolean);
+    const partes = contenido.split(/[@\r\n]+/).map(function(p) { return p.trim(); }).filter(Boolean);
 
     const datos = {
       metodo: 'pdf417',
@@ -226,7 +211,9 @@ const DNIParser = (() => {
 
     const fechas = [];
 
-    for (const parte of partes) {
+    for (let i = 0; i < partes.length; i++) {
+      const parte = partes[i];
+
       if (!datos.dni && /^\d{7,8}$/.test(parte)) { datos.dni = parte; continue; }
       if (!datos.sexo && /^(M|F|X|MASCULINO|FEMENINO)$/i.test(parte)) {
         datos.sexo = normalizarSexo(parte); continue;
@@ -239,7 +226,7 @@ const DNIParser = (() => {
       }
       if (!datos.cuil) {
         const mC = parte.match(/^(\d{2})[-\s]?(\d{8})[-\s]?(\d)$/);
-        if (mC) { datos.cuil = `${mC[1]}-${mC[2]}-${mC[3]}`; continue; }
+        if (mC) { datos.cuil = mC[1] + '-' + mC[2] + '-' + mC[3]; continue; }
       }
       if (!datos.tramite && /^\d{10,14}$/.test(parte) && parte !== datos.dni) {
         datos.tramite = parte; continue;
@@ -247,9 +234,9 @@ const DNIParser = (() => {
       if (/^(DNI|LC|LE|CI|PASAPORTE)$/i.test(parte)) {
         datos.tipoDocumento = normalizarTipoDoc(parte); continue;
       }
-      if (/^[A-ZÁÉÍÓÚÑa-záéíóúñ\s]{3,}$/.test(parte) &&
-          !/^(ARGENTINA|ARG|REPUBLICA|REPÚBLICA|EJEMPLAR|TRAMITE|TRÁMITE|NACIONALIDAD|MERCOSUR|IDARG|DNI|APELLIDO|NOMBRE)$/i.test(parte)) {
-        const up = parte.toUpperCase().trim();
+      if (esNombreValido(parte) && !/^\d+$/.test(parte)) {
+        const up = parte.toUpperCase();
+        if (/^(ARGENTINA|ARG|REPUBLICA|REPUBLICA|EJEMPLAR|TRAMITE|NACIONALIDAD|MERCOSUR|IDARG|DNI|APELLIDO|NOMBRE)$/.test(up)) continue;
         if (!datos.apellido) datos.apellido = up;
         else if (!datos.nombre) datos.nombre = up;
       }
@@ -265,7 +252,8 @@ const DNIParser = (() => {
     if (fechas[2]) datos.fechaVencimiento = fechas[2];
 
     if (datos.apellido || datos.nombre) {
-      datos.nombreCompleto = `${datos.apellido || ''} ${datos.nombre || ''}`.trim();
+      datos.nombreCompleto = (datos.apellido || '') + ' ' + (datos.nombre || '');
+      datos.nombreCompleto = datos.nombreCompleto.trim();
     }
 
     datos.edad = calcularEdad(datos.fechaNacimiento);
@@ -286,13 +274,12 @@ const DNIParser = (() => {
   }
 
   function parsearMRZ(texto) {
-    // 🚫 Solo aceptar MRZ argentina
     const limpio = String(texto).toUpperCase().replace(/\s/g, '');
-    if (!/IDARG/.test(limpio)) return null;
+    if (limpio.indexOf('IDARG') < 0) return null;
 
     const lineasLimp = String(texto).split(/[\n\r]+/)
-      .map(l => l.toUpperCase().replace(/[^A-Z0-9<]/g, ''))
-      .filter(l => l.length >= 20);
+      .map(function(l) { return l.toUpperCase().replace(/[^A-Z0-9<]/g, ''); })
+      .filter(function(l) { return l.length >= 20; });
 
     let lineasMRZ = [];
     if (lineasLimp.length >= 3) {
@@ -302,13 +289,19 @@ const DNIParser = (() => {
       if (todo.length < 60) return null;
       lineasMRZ = [todo.substring(0, 30), todo.substring(30, 60), todo.substring(60, 90) || ''];
     }
-    lineasMRZ = lineasMRZ.map(l => (l + '<'.repeat(30)).substring(0, 30));
+    lineasMRZ = lineasMRZ.map(function(l) { return (l + '<'.repeat(30)).substring(0, 30); });
 
-    let [l1, l2, l3] = lineasMRZ;
+    let l1 = lineasMRZ[0], l2 = lineasMRZ[1], l3 = lineasMRZ[2];
+
     if (!/^IDARG/.test(l1)) {
-      const idx = lineasMRZ.findIndex(l => /^IDARG/.test(l));
+      let idx = -1;
+      for (let i = 0; i < lineasMRZ.length; i++) {
+        if (/^IDARG/.test(lineasMRZ[i])) { idx = i; break; }
+      }
       if (idx > 0) {
-        [l1, l2, l3] = [lineasMRZ[idx], lineasMRZ[idx + 1] || '', lineasMRZ[idx + 2] || ''];
+        l1 = lineasMRZ[idx];
+        l2 = lineasMRZ[idx + 1] || '';
+        l3 = lineasMRZ[idx + 2] || '';
       }
     }
 
@@ -335,7 +328,7 @@ const DNIParser = (() => {
     if (partes[0]) datos.apellido = partes[0].replace(/</g, ' ').trim();
     if (partes[1]) datos.nombre = partes[1].replace(/</g, ' ').trim();
     if (datos.apellido || datos.nombre) {
-      datos.nombreCompleto = `${datos.apellido || ''} ${datos.nombre || ''}`.trim();
+      datos.nombreCompleto = ((datos.apellido || '') + ' ' + (datos.nombre || '')).trim();
     }
 
     datos.edad = calcularEdad(datos.fechaNacimiento);
@@ -349,21 +342,16 @@ const DNIParser = (() => {
   // ==========================================
   function parsear(texto) {
     if (!texto) return null;
-
-    // 🚫 Rechazar SIEMPRE si es de otro país
     if (esDeOtroPais(texto)) return null;
 
-    // 1. QR del DNI nuevo
     const porQR = parsearQR(texto);
     if (porQR) return porQR;
 
-    // 2. MRZ argentina
     if (esMRZ(texto)) {
       const porMRZ = parsearMRZ(texto);
       if (porMRZ) return porMRZ;
     }
 
-    // 3. PDF417 viejo
     const porPDF = parsearPDF417(texto);
     if (porPDF) return porPDF;
 
@@ -371,13 +359,13 @@ const DNIParser = (() => {
   }
 
   return {
-    parsear,
-    parsearQR,
-    parsearPDF417,
-    parsearMRZ,
-    esMRZ,
-    esDeEstePais,
-    esDeOtroPais
+    parsear: parsear,
+    parsearQR: parsearQR,
+    parsearPDF417: parsearPDF417,
+    parsearMRZ: parsearMRZ,
+    esMRZ: esMRZ,
+    esDeEstePais: esDeEstePais,
+    esDeOtroPais: esDeOtroPais
   };
 })();
 
