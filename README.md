@@ -1,38 +1,52 @@
-# escaner-dni-ar
-Escáner de DNI argentino (PDF417 + OCR + NFC) en el navegador
-# 🇦🇷 DNI Scanner AR
+# 🇦🇷 Escáner de Documentos Sudamericanos
 
-Escáner de DNI argentino que funciona **100% en el navegador**.
-Lee el código **PDF417** del frente, aplica **OCR** como respaldo y
-opcionalmente lee el **chip NFC** del nuevo DNI electrónico.
-
-> ⚠️ **Aviso legal**: Esta herramienta es solo para fines educativos y de
-> uso personal. El tratamiento de datos personales debe cumplir con la
-> **Ley 25.326 de Protección de Datos Personales** de Argentina.
+Escáner de documentos de identidad que funciona **100% en el navegador**.
+Lee códigos de barras (QR, PDF417, Code128) y MRZ. Sin servidores. Sin subir imágenes. Todo local.
 
 ## ✨ Características
 
-- 📷 **PDF417**: lectura del código de barras 2D del anverso (fiabilidad 99.9%)
-- 🔍 **OCR**: respaldo con Tesseract.js para el frente del documento
-- 📡 **NFC**: soporte experimental para el chip del DNI electrónico (Android)
-- 🔐 **Validaciones locales**: DNI, CUIL (módulo 11), fechas, edad
-- 🛡️ **100% en el cliente**: las imágenes nunca salen del dispositivo
-- 📱 **Responsive**: funciona en móvil y escritorio
+- 📷 **Cámara en vivo** con auto-inicio y fallbacks
+- 🔍 **Triple motor de lectura**: BarcodeDetector + ZXing + jsQR
+- 🌎 **10 países sudamericanos** con detección estricta
+- ⚠️ **Detección de país incorrecto**: muestra un modal si el documento no corresponde
+- 📋 **Copiar datos** al portapapeles
+- 📥 **Descargar JSON** del escaneo
+- 💾 **Historial local** de los últimos 50 escaneos
+- 🖼️ **Subir imagen** desde galería como alternativa
+- 📱 **PWA instalable** en el celular
+- 🎨 **Modo claro/oscuro**
+- 🔔 **Sonido y vibración** al detectar
+- 🛡️ **100% local**: las imágenes nunca salen del dispositivo
 
-## 🚀 Demo
+## 🌎 Países soportados
 
-👉 [Ver demo](https://TU-USUARIO.github.io/dni-scanner/)
+| País | Documento | Método | Fiabilidad |
+|---|---|---|---|
+| 🇦🇷 Argentina | DNI tarjeta (nuevo y viejo) | QR + PDF417 + MRZ | 🟢 Alta |
+| 🇨🇱 Chile | Cédula de Identidad | PDF417 | 🟢 Alta |
+| 🇺🇾 Uruguay | Cédula de Identidad | MRZ | 🟢 Alta |
+| 🇵🇾 Paraguay | Cédula de Identidad Civil | MRZ | 🟢 Alta |
+| 🇵🇪 Perú | DNI Electrónico | MRZ | 🟢 Alta |
+| 🇧🇴 Bolivia | Cédula de Identidad | MRZ | 🟡 Media |
+| 🇨🇴 Colombia | Cédula de Ciudadanía | MRZ | 🟡 Media |
+| 🇪🇨 Ecuador | Cédula de Ciudadanía | MRZ | 🟡 Media |
+| 🇻🇪 Venezuela | Cédula de Identidad | MRZ | 🟡 Media |
+| 🇧🇷 Brasil | Pasaporte | MRZ | 🟢 Alta |
+
+> ⚠️ **Nota sobre Brasil**: el RG brasileño varía por estado y no tiene un formato nacional único. Solo se lee el **pasaporte** (MRZ TD3 estándar).
 
 ## 🛠️ Tecnologías
 
 | Librería | Uso |
 |---|---|
-| [ZXing-js](https://github.com/zxing-js/library) | Decodificación del PDF417 |
-| [Tesseract.js](https://github.com/naptha/tesseract.js) | OCR en el navegador |
-| Web NFC API | Lectura del chip (Android Chrome) |
+| [ZXing-js](https://github.com/zxing-js/library) | Lectura de PDF417 y otros códigos de barras |
+| [jsQR](https://github.com/cozmo/jsQR) | Lectura de QR (fallback) |
+| [BarcodeDetector API](https://developer.mozilla.org/en-US/docs/Web/API/BarcodeDetector) | Detección nativa (rápida) |
+| Web Audio API | Sonido al detectar |
+| Vibration API | Vibración al detectar |
 
-## 📦 Instalación
+## 📦 Instalación local
 
 ```bash
-git clone https://github.com/TU-USUARIO/dni-scanner.git
-cd dni-scanner
+git clone https://github.com/jri896662-beep/escaner-dni-ar.git
+cd escaner-dni-ar
