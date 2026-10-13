@@ -8,14 +8,13 @@
   const STORAGE_KEY = 'escaner_dni_historial';
   const MAX_HISTORIAL = 50;
   const PAIS_KEY = 'pais_escaner';
+  const TEMA_KEY = 'tema_escaner';
+  const SONIDO_KEY = 'sonido_escaner';
 
   // ==========================================
   // DEBUG
   // ==========================================
-  function log(msg, color = '#4ade80') {
-    if (!DEBUG) return;
-    console.log(msg);
-  }
+  function log(msg) { if (DEBUG) console.log(msg); }
 
   // ==========================================
   // DOM
@@ -34,9 +33,11 @@
   const btnUpload = document.getElementById('btn-upload');
   const btnRepetir = document.getElementById('btn-repetir');
   const btnFlash = document.getElementById('flash-btn');
+  const btnTema = document.getElementById('btn-tema');
   const fileInput = document.getElementById('file-input');
   const resultado = document.getElementById('resultado');
   const badgeMetodo = document.getElementById('badge-metodo');
+  const badgePais = document.getElementById('badge-pais');
   const resultPais = document.getElementById('result-pais');
   const labelNumero = document.getElementById('label-numero');
   const statusPill = document.getElementById('status-pill');
@@ -59,6 +60,15 @@
   let stopScan = null;
   let ultimoResultado = null;
   let paisSeleccionado = localStorage.getItem(PAIS_KEY) || 'arg';
+  let sonidoActivo = localStorage.getItem(SONIDO_KEY) !== 'false';
+
+  // ==========================================
+  // BANDERAS POR PAÍS
+  // ==========================================
+  const BANDERAS = {
+    arg: '🇦🇷', chl: '🇨🇱', ury: '🇺🇾', pry: '🇵🇾', per: '🇵🇪',
+    bol: '🇧🇴', col: '🇨🇴', ecu: '🇪🇨', ven: '🇻🇪', bra: '🇧🇷'
+  };
 
   // ==========================================
   // HELPERS
@@ -96,37 +106,126 @@
   }
 
   // ==========================================
+  // SONIDO + VIBRACIÓN
+  // ==========================================
+  function reproducirSonidoExito() {
+    if (!sonidoActivo) return;
+    try {
+      const AudioContext = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContext) return;
+      const ctx = new AudioContext();
+
+      // Dos tonos cortos ascendentes (agradable)
+      const notas = [
+        { freq: 880, start: 0, dur: 0.08 },
+        { freq: 1318.5, start: 0.09, dur: 0.12 }
+      ];
+
+      notas.forEach(nota => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.value = nota.freq;
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+
+        const t = ctx.currentTime + nota.start;
+        gain.gain.setValueAtTime(0, t);
+        gain.gain.linearRampToValueAtTime(0.15, t + 0.01);
+        gain.gain.exponentialRampToValueAtTime(0.001, t + nota.dur);
+
+        osc.start(t);
+        osc.stop(t + nota.dur);
+      });
+
+      setTimeout(() => ctx.close(), 500);
+    } catch (e) {
+      log('Error reproduciendo sonido: ' + e.message);
+    }
+  }
+
+  function reproducirSonidoError() {
+    if (!sonidoActivo) return;
+    try {
+      const AudioContext = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContext) return;
+      const ctx = new AudioContext();
+
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = 220;
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+
+      const t = ctx.currentTime;
+      gain.gain.setValueAtTime(0.15, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.25);
+
+      osc.start(t);
+      osc.stop(t + 0.25);
+
+      setTimeout(() => ctx.close(), 500);
+    } catch (e) {}
+  }
+
+  function vibrarExito() {
+    if (!sonidoActivo) return;
+    if ('vibrate' in navigator) {
+      navigator.vibrate([60, 40, 100]);
+    }
+  }
+
+  function vibrarError() {
+    if (!sonidoActivo) return;
+    if ('vibrate' in navigator) {
+      navigator.vibrate([200, 100, 200]);
+    }
+  }
+
+  // ==========================================
+  // TEMA CLARO / OSCURO
+  // ==========================================
+  function aplicarTema(tema) {
+    if (tema === 'light') {
+      document.documentElement.setAttribute('data-theme', 'light');
+    } else {
+      document.documentElement.removeAttribute('data-theme');
+    }
+    localStorage.setItem(TEMA_KEY, tema);
+  }
+
+  function inicializarTema() {
+    const guardado = localStorage.getItem(TEMA_KEY) || 'dark';
+    aplicarTema(guardado);
+
+    if (btnTema) {
+      btnTema.addEventListener('click', () => {
+        const actual = document.documentElement.getAttribute('data-theme');
+        const nuevo = actual === 'light' ? 'dark' : 'light';
+        aplicarTema(nuevo);
+      });
+    }
+  }
+
+  // ==========================================
   // DETECCIÓN DE PAÍS
   // ==========================================
   function detectarPaisDelTexto(texto) {
     if (!texto) return null;
-
-    // Probar parser argentino primero
-    if (typeof DNIParser !== 'undefined' && DNIParser.esDeEstePais(texto)) {
-      return 'arg';
-    }
-
-    // Probar parsers de otros países
+    if (typeof DNIParser !== 'undefined' && DNIParser.esDeEstePais(texto)) return 'arg';
     if (typeof ParsersMundo !== 'undefined' && ParsersMundo.detectarPais) {
       const detectado = ParsersMundo.detectarPais(texto);
       if (detectado) return detectado;
     }
-
     return null;
   }
 
-    function nombrePaisDesdeCodigo(codigo) {
+  function nombrePaisDesdeCodigo(codigo) {
     const nombres = {
-      arg: 'Argentina',
-      chl: 'Chile',
-      ury: 'Uruguay',
-      pry: 'Paraguay',
-      per: 'Perú',
-      bol: 'Bolivia',
-      col: 'Colombia',
-      ecu: 'Ecuador',
-      ven: 'Venezuela',
-      bra: 'Brasil'
+      arg: 'Argentina', chl: 'Chile', ury: 'Uruguay', pry: 'Paraguay',
+      per: 'Perú', bol: 'Bolivia', col: 'Colombia', ecu: 'Ecuador',
+      ven: 'Venezuela', bra: 'Brasil'
     };
     return nombres[codigo] || codigo;
   }
@@ -232,7 +331,6 @@
 
       try {
         await video.play();
-        log('▶️ video.play() OK');
       } catch (playErr) {
         setTimeout(async () => {
           try { await video.play(); } catch (e) {}
@@ -244,7 +342,6 @@
         const check = setInterval(() => {
           if (video.videoWidth > 0) {
             clearInterval(check);
-            log(`📐 Video: ${video.videoWidth}x${video.videoHeight}`);
             resolve();
           }
         }, 100);
@@ -317,13 +414,10 @@
     if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
     trackActual = null;
 
-    // ==========================================
-    // DETECCIÓN DE PAÍS
-    // ==========================================
     const paisDelDocumento = detectarPaisDelTexto(texto);
     const paisElegidoNombre = nombrePaisDesdeCodigo(paisSeleccionado);
 
-    // 🔴 Si el documento es de OTRO país distinto al elegido
+    // 🔴 Documento de otro país
     if (paisDelDocumento && paisDelDocumento !== paisSeleccionado) {
       const nombreDetectado = nombrePaisDesdeCodigo(paisDelDocumento);
       mostrarErrorDocumento(
@@ -335,12 +429,12 @@
       setStatus('Documento incorrecto', 'error');
       if (btnRepetir) btnRepetir.hidden = false;
       destacarChipPais(paisDelDocumento);
+      reproducirSonidoError();
+      vibrarError();
       return;
     }
 
-    // ==========================================
-    // PARSEAR CON EL PARSER DEL PAÍS ELEGIDO
-    // ==========================================
+    // Parsear con el parser del país elegido
     let datos = null;
     if (paisSeleccionado === 'arg') {
       datos = DNIParser.parsear(texto);
@@ -348,30 +442,29 @@
       datos = ParsersMundo.parsear(paisSeleccionado, texto);
     }
 
-    // 🔴 Si no se pudieron extraer datos
     if (!datos || (!datos.dni && !datos.numero && !datos.apellido && !datos.nombre)) {
       if (paisDelDocumento) {
         const nombreDetectado = nombrePaisDesdeCodigo(paisDelDocumento);
         mostrarErrorDocumento(
           'Documento no reconocido',
-          `No pudimos leer este documento como uno de ${paisElegidoNombre}. Parece ser de ${nombreDetectado}. Verificá la selección de país.`
+          `No pudimos leer este documento como uno de ${paisElegidoNombre}. Parece ser de ${nombreDetectado}.`
         );
       } else {
         mostrarErrorDocumento(
           'Documento no reconocido',
-          `No pudimos interpretar este código como un documento de ${paisElegidoNombre}. Verificá que sea el documento correcto y volvé a intentar.`
+          `No pudimos interpretar este código como un documento de ${paisElegidoNombre}. Verificá que sea el documento correcto.`
         );
       }
       if (estado) { estado.textContent = '⚠️ No se pudieron extraer datos'; estado.classList.add('error'); estado.classList.remove('ok'); }
       if (escaneoEstado) escaneoEstado.textContent = 'Texto: ' + texto.substring(0, 60);
       setStatus('Sin datos', 'error');
       if (btnRepetir) btnRepetir.hidden = false;
+      reproducirSonidoError();
+      vibrarError();
       return;
     }
 
-    // ==========================================
-    // TODO OK: RENDERIZAR
-    // ==========================================
+    // ✅ Todo OK
     render(datos);
     if (estado) {
       estado.textContent = '✓ ' + (datos.nombreCompleto || datos.dni || datos.numero || 'Documento');
@@ -381,6 +474,8 @@
     if (escaneoEstado) escaneoEstado.textContent = '✅ Escaneo OK';
     setStatus('Escaneo OK', 'active');
     if (btnRepetir) btnRepetir.hidden = false;
+    reproducirSonidoExito();
+    vibrarExito();
   }
 
   // ==========================================
@@ -404,12 +499,24 @@
   function render(d) {
     ultimoResultado = d;
 
-    // Ajustes según país
     const esChile = d.pais === 'CHL';
     const esUruguay = d.pais === 'URY';
+    const esParaguay = d.pais === 'PRY';
+    const esBrasil = d.pais === 'BRA';
+
     if (labelNumero) {
-      labelNumero.textContent = esChile ? 'RUN' : esUruguay ? 'Número de CI' : 'Número de DNI';
+      if (esChile) labelNumero.textContent = 'RUN';
+      else if (esUruguay) labelNumero.textContent = 'Número de CI';
+      else if (esParaguay) labelNumero.textContent = 'Número de CI';
+      else if (esBrasil) labelNumero.textContent = 'Número de pasaporte';
+      else labelNumero.textContent = 'Número de DNI';
     }
+
+    if (badgePais) {
+      const codigoPais = (d.pais || 'ARG').toLowerCase();
+      badgePais.textContent = BANDERAS[codigoPais] || '📄';
+    }
+
     if (resultPais) {
       resultPais.textContent = d.paisNombre
         ? `Datos extraídos · ${d.paisNombre}`
@@ -609,10 +716,11 @@
           if (escaneoEstado) escaneoEstado.textContent = 'Probá con una imagen más nítida';
           setStatus('Sin código', 'error');
           if (btnRepetir) btnRepetir.hidden = false;
+          reproducirSonidoError();
+          vibrarError();
           return;
         }
 
-        // Detección estricta de país
         const paisDelDocumento = detectarPaisDelTexto(texto);
         const paisElegidoNombre = nombrePaisDesdeCodigo(paisSeleccionado);
 
@@ -620,12 +728,14 @@
           const nombreDetectado = nombrePaisDesdeCodigo(paisDelDocumento);
           mostrarErrorDocumento(
             'Documento incorrecto',
-            `Elegiste <strong>${paisElegidoNombre}</strong> pero este documento parece ser de <strong>${nombreDetectado}</strong>.<br><br>Cambiá el país en el selector de arriba y volvé a intentar.`
+            `Elegiste <strong>${paisElegidoNombre}</strong> pero este documento parece ser de <strong>${nombreDetectado}</strong>.`
           );
           if (estado) { estado.textContent = `⚠️ Este documento es de ${nombreDetectado}`; estado.classList.add('error'); }
           setStatus('Documento incorrecto', 'error');
           if (btnRepetir) btnRepetir.hidden = false;
           destacarChipPais(paisDelDocumento);
+          reproducirSonidoError();
+          vibrarError();
           return;
         }
 
@@ -646,6 +756,8 @@
           if (escaneoEstado) escaneoEstado.textContent = '✅ Escaneo OK';
           setStatus('Escaneo OK', 'active');
           if (btnRepetir) btnRepetir.hidden = false;
+          reproducirSonidoExito();
+          vibrarExito();
           return;
         }
 
@@ -656,6 +768,8 @@
         if (estado) { estado.textContent = '⚠️ No se pudieron extraer datos'; estado.classList.add('error'); }
         setStatus('Sin datos', 'error');
         if (btnRepetir) btnRepetir.hidden = false;
+        reproducirSonidoError();
+        vibrarError();
       };
       imageEl.src = src;
     };
@@ -680,8 +794,8 @@
         localStorage.setItem(PAIS_KEY, paisSeleccionado);
         chips.forEach(c => c.classList.toggle('active', c === chip));
 
-        const nombrePais = chip.querySelector('span:not(.flag):not(.soon)')?.textContent || '';
-        mostrarToast(`País seleccionado: ${nombrePais}`, 'success');
+        const nombrePais = chip.querySelector('.chip-name')?.textContent || '';
+        mostrarToast(`País: ${nombrePais}`, 'success');
 
         if (resultado) resultado.hidden = true;
 
@@ -771,11 +885,10 @@
   // ==========================================
   // INIT
   // ==========================================
+  inicializarTema();
   actualizarContadorHistorial();
   inicializarSelectorPais();
   log('=== Iniciando ===');
-  log('DNIScanner: ' + typeof DNIScanner);
-  log('ParsersMundo: ' + typeof ParsersMundo);
   log('País seleccionado: ' + paisSeleccionado);
 
   setTimeout(iniciarCamara, 300);
