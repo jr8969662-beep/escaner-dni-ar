@@ -87,9 +87,12 @@ const DNIParser = (() => {
   // ==========================================
   // ✅ DETECCIÓN: ¿ES ARGENTINO?
   // ==========================================
-  function esDeEstePais(texto) {
+    function esDeOtroPais(texto) {
     if (!texto) return false;
+    const t = String(texto).trim();
 
+    // MRZ de otros países sudamericanos
+    if (/IDURY|IDPRY|IDPER|IDBOL|IDCOL|IDECU|IDCH
     // 🚫 Si es de otro país, NO es argentino
     if (esDeOtroPais(texto)) return false;
 
