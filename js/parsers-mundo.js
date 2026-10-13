@@ -623,15 +623,15 @@ const VenezuelaParser = (() => {
 
 
 // ============================================================
-// 🇧🇷 BRASIL - Pasaporte (MRZ TD3) y RG (varía por estado)
-// Nota: el RG brasileño varía mucho entre estados, solo detectamos pasaporte por MRZ.
+// 🇧🇷 BRASIL - Pasaporte (MRZ TD3)
 // ============================================================
 const BrasilParser = (() => {
 
   function esDeEstePais(texto) {
-    const t = String(texto || '').replace(/\s/g, '').toUpperCase();
-    // Pasaporte brasileño: MRZ empieza con BR + número
-    if (/^BR\d{8,}/.test(t)) return true;
+    if (!texto) return false;
+    const t = String(texto).replace(/\s/g, '').toUpperCase();
+    // Pasaporte brasileño: MRZ empieza con P<BRA
+    if (/P<BRA/.test(t)) return true;
     if (/IDBRA/i.test(t)) return true;
     return false;
   }
@@ -640,66 +640,88 @@ const BrasilParser = (() => {
     if (!texto || typeof texto !== 'string') return null;
     if (!esDeEstePais(texto)) return null;
 
-    // Intentar MRZ de pasaporte (formato TD3: 2 líneas de 44 chars)
+    // Limpiar: mayúsculas, dejar A-Z, 0-9 y <
     const limpio = texto.toUpperCase().replace(/[^A-Z0-9<]/g, '');
 
-    // Formato TD3 del pasaporte: "P<BRA..." seguido de 2 líneas de 44
-    const matchPasaporte = limpio.match(/P<BRA(.{0,88})/);
-    if (matchPasaporte) {
-      // Parsear solo la línea de datos (segunda línea de 44 chars)
-      const resto = matchPasaporte[1];
-      if (resto.length >= 88) {
-        const l1 = resto.substring(0, 44);
-        const l2 = resto.substring(44, 88);
+    // Buscar la posición de "P<BRA"
+    const idx = limpio.indexOf('P<BRA');
+    if (idx < 0) return null;
 
-        const numPasaporte = l1.substring(0, 9).replace(/</g, '');
-        const nacionalidad = l1.substring(10, 13).replace(/</g, '');
-        const fechaNacRaw = l1.substring(13, 19);
-        const sexoRaw = l1.charAt(20);
-        const fechaVencRaw = l1.substring(21, 27);
+    // Extraer exactamente 88 caracteres desde "P<BRA"
+    // (formato TD3 = 2 líneas × 44 caracteres)
+    const bloque = limpio.substring(idx, idx + 88);
+    if (bloque.length < 88) return null;
 
-        // Línea 2: APELLIDO<<NOMBRE
-        const l2clean = l2.replace(/<+$/, '');
-        const partes = l2clean.split('<<');
-        const apellidos = partes[0] ? partes[0].replace(/</g, ' ').trim() : null;
-        const nombres = partes[1] ? partes[1].replace(/</g, ' ').trim() : null;
-        const nombreCompleto = `${apellidos || ''} ${nombres || ''}`.trim() || null;
+    const l1 = bloque.substring(0, 44);
+    const l2 = bloque.substring(44, 88);
 
-        return {
-          pais: 'BRA',
-          paisNombre: 'Brasil',
-          tipoDocumento: 'Pasaporte',
-          metodo: 'mrz',
-          raw: texto,
+    // ===== Línea 1: tipo + país + nombres =====
+    // P<BRA + APELLIDO<<NOMBRE<<<<<<<<
+    const nombreRaw = l1.substring(5); // desde después de P<BRA
+    const partes = nombreRaw.replace(/<+$/, '').split('<<');
+    const apellidos = partes[0] ? partes[0].replace(/</g, ' ').trim() : null;
+    const nombres = partes[1] ? partes[1].replace(/</g, ' ').trim() : null;
+    const nombreCompleto = `${apellidos || ''} ${nombres || ''}`.trim() || null;
 
-          numero: numPasaporte,
-          pasaporte: numPasaporte,
-          tramite: null,
+    // ===== Línea 2: número, nacionalidad, fechas, sexo =====
+    // Posiciones típicas (formato ICAO TD3):
+    // [0-8]   número de pasaporte (9 chars)
+    // [9]     check digit del número
+    // [10-12] nacionalidad (3)
+    // [13-18] fecha nacimiento YYMMDD (6)
+    // [19]    check digit fecha nac
+    // [20]    sexo (M/F)
+    // [21-26] fecha vencimiento YYMMDD (6)
+    // [27]    check digit fecha venc
+    // [28-41] número personal / opcional
+    // [42]    check digit final
+    // [43]    check digit compuesto
 
-          apellido: apellidos,
-          nombre: nombres,
-          nombreCompleto: nombreCompleto,
-          sexo: sexoRaw === 'M' ? 'Masculino' : sexoRaw === 'F' ? 'Femenino' : sexoRaw,
-          fechaNacimiento: ParserHelpers.yymmddToISO(fechaNacRaw),
-          edad: ParserHelpers.calcularEdad(ParserHelpers.yymmddToISO(fechaNacRaw)),
-          nacionalidad: nacionalidad === 'BRA' ? 'BRASILEÑA' : nacionalidad,
-          lugarNacimiento: null,
-          domicilio: null,
+    const numPasaporte = l2.substring(0, 9).replace(/</g, '');
+    const nacionalidad = l2.substring(10, 13).replace(/</g, '');
+    const fechaNacRaw = l2.substring(13, 19);
+    const sexoRaw = l2.charAt(20);
+    const fechaVencRaw = l2.substring(21, 27);
 
-          ejemplar: null,
-          fechaEmision: null,
-          fechaVencimiento: ParserHelpers.yymmddToISO(fechaVencRaw),
-          vigente: ParserHelpers.estaVigente(ParserHelpers.yymmddToISO(fechaVencRaw)),
+    if (!/^\d{6}$/.test(fechaNacRaw)) return null;
 
-          numeroValido: true,
-          cuil: null,
-          cuilValido: null
-        };
-      }
-    }
+    const fechaNacimiento = ParserHelpers.yymmddToISO(fechaNacRaw);
+    const fechaVencimiento = ParserHelpers.yymmddToISO(fechaVencRaw);
+    const edad = ParserHelpers.calcularEdad(fechaNacimiento);
 
-    // RG brasileño no tiene formato estandarizado, devolvemos null
-    return null;
+    // Convertir "<<" a espacio en los nombres
+    const limpiarNombre = (s) => s ? s.replace(/</g, ' ').replace(/\s+/g, ' ').trim() : null;
+
+    return {
+      pais: 'BRA',
+      paisNombre: 'Brasil',
+      tipoDocumento: 'Pasaporte',
+      metodo: 'mrz',
+      raw: texto,
+
+      numero: numPasaporte,
+      pasaporte: numPasaporte,
+      tramite: null,
+
+      apellido: limpiarNombre(apellidos),
+      nombre: limpiarNombre(nombres),
+      nombreCompleto: limpiarNombre(nombreCompleto),
+      sexo: sexoRaw === 'M' ? 'Masculino' : sexoRaw === 'F' ? 'Femenino' : (sexoRaw === '<' ? 'No especificado' : sexoRaw),
+      fechaNacimiento: fechaNacimiento,
+      edad: edad,
+      nacionalidad: nacionalidad === 'BRA' ? 'BRASILEÑA' : nacionalidad,
+      lugarNacimiento: null,
+      domicilio: null,
+
+      ejemplar: null,
+      fechaEmision: null,
+      fechaVencimiento: fechaVencimiento,
+      vigente: ParserHelpers.estaVigente(fechaVencimiento),
+
+      numeroValido: /^[A-Z]{2}\d{6}$/.test(numPasaporte),
+      cuil: null,
+      cuilValido: null
+    };
   }
 
   return { parsear, esDeEstePais };
