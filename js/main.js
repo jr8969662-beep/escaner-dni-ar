@@ -49,6 +49,25 @@
   const btnLimpiarHistorial = document.getElementById('btn-limpiar-historial');
   const historialLista = document.getElementById('historial-lista');
   const toast = document.getElementById('toast');
+    // DOMICILIO OCR
+  const btnDomicilio = document.getElementById('btn-domicilio');
+  const modalDomicilio = document.getElementById('modal-domicilio');
+  const btnCerrarModalDomicilio = document.getElementById('btn-cerrar-modal-domicilio');
+  const btnCancelarDomicilio = document.getElementById('btn-cancelar-domicilio');
+  const btnCapturarDomicilio = document.getElementById('btn-capturar-domicilio');
+  const btnReintentarDomicilio = document.getElementById('btn-reintentar-domicilio');
+  const btnGuardarDomicilio = document.getElementById('btn-guardar-domicilio');
+  const domicilioVideo = document.getElementById('domicilio-video');
+  const domicilioPreview = document.getElementById('domicilio-preview');
+  const domicilioProgress = document.getElementById('domicilio-progress');
+  const domicilioProgressFill = document.getElementById('domicilio-progress-fill');
+  const domicilioProgressText = document.getElementById('domicilio-progress-text');
+  const domicilioResultado = document.getElementById('domicilio-resultado');
+  const domicilioInput = document.getElementById('domicilio-input');
+  const domicilioAviso = document.getElementById('domicilio-aviso');
+
+  let domicilioStream = null;
+  let domicilioCapturado = null;
 
   let stream = null;
   let trackActual = null;
@@ -826,4 +845,170 @@
   inicializarSelectorPais();
 
   setTimeout(iniciarCamara, 300);
+    // ==========================================
+  // DOMICILIO OCR
+  // ==========================================
+  async function abrirModalDomicilio() {
+    if (!ultimoResultado) return;
+    if (modalDomicilio) modalDomicilio.hidden = false;
+
+    // Reset estado
+    if (domicilioPreview) domicilioPreview.hidden = true;
+    if (domicilioResultado) domicilioResultado.hidden = true;
+    if (domicilioProgress) domicilioProgress.hidden = true;
+    if (btnCapturarDomicilio) btnCapturarDomicilio.hidden = false;
+    if (btnReintentarDomicilio) btnReintentarDomicilio.hidden = true;
+    if (btnGuardarDomicilio) btnGuardarDomicilio.hidden = true;
+    domicilioCapturado = null;
+
+    // Iniciar cámara del modal
+    try {
+      domicilioStream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+        audio: false
+      });
+      if (domicilioVideo) {
+        domicilioVideo.srcObject = domicilioStream;
+        domicilioVideo.hidden = false;
+        try { await domicilioVideo.play(); } catch (e) {}
+      }
+    } catch (e) {
+      mostrarToast('No se pudo acceder a la cámara', 'error');
+      if (modalDomicilio) modalDomicilio.hidden = true;
+    }
+  }
+
+  function cerrarModalDomicilio() {
+    if (domicilioStream) {
+      domicilioStream.getTracks().forEach(t => t.stop());
+      domicilioStream = null;
+    }
+    if (domicilioVideo) domicilioVideo.srcObject = null;
+    if (modalDomicilio) modalDomicilio.hidden = true;
+    domicilioCapturado = null;
+  }
+
+  async function capturarYLeerDomicilio() {
+    if (!domicilioVideo || !domicilioVideo.srcObject) return;
+    if (!domicilioVideo.videoWidth) {
+      mostrarToast('La cámara no está lista', 'error');
+      return;
+    }
+
+    // Capturar frame
+    const canvas = document.createElement('canvas');
+    canvas.width = domicilioVideo.videoWidth;
+    canvas.height = domicilioVideo.videoHeight;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(domicilioVideo, 0, 0, canvas.width, canvas.height);
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
+    domicilioCapturado = dataUrl;
+
+    // Detener cámara
+    if (domicilioStream) {
+      domicilioStream.getTracks().forEach(t => t.stop());
+      domicilioStream = null;
+    }
+
+    // Mostrar preview
+    if (domicilioPreview) {
+      domicilioPreview.src = dataUrl;
+      domicilioPreview.hidden = false;
+    }
+    if (domicilioVideo) domicilioVideo.hidden = true;
+
+    // Ocultar botones viejos
+    if (btnCapturarDomicilio) btnCapturarDomicilio.hidden = true;
+
+    // Mostrar progress
+    if (domicilioProgress) domicilioProgress.hidden = false;
+    if (domicilioProgressFill) domicilioProgressFill.style.width = '0%';
+    if (domicilioProgressText) domicilioProgressText.textContent = 'Inicializando OCR…';
+
+    try {
+      const resultado = await DomicilioOCR.leer(
+        dataUrl,
+        paisSeleccionado,
+        (progreso) => {
+          if (domicilioProgressFill) domicilioProgressFill.style.width = (progreso * 100) + '%';
+          if (domicilioProgressText) domicilioProgressText.textContent = 'Reconociendo texto… ' + Math.round(progreso * 100) + '%';
+        }
+      );
+
+      if (domicilioProgress) domicilioProgress.hidden = true;
+
+      // Mostrar resultado
+      if (domicilioResultado) domicilioResultado.hidden = false;
+      if (domicilioInput) {
+        domicilioInput.value = resultado.domicilio || '';
+      }
+
+      if (resultado.domicilio) {
+        if (domicilioAviso) domicilioAviso.hidden = false;
+        mostrarToast('✓ Domicilio detectado', 'success');
+      } else {
+        if (domicilioInput) domicilioInput.value = '';
+        if (domicilioInput) domicilioInput.placeholder = 'No se detectó. Escribilo manualmente.';
+        if (domicilioAviso) domicilioAviso.hidden = false;
+        mostrarToast('No se detectó. Escribilo a mano.', 'error');
+      }
+
+      // Mostrar botones
+      if (btnReintentarDomicilio) btnReintentarDomicilio.hidden = false;
+      if (btnGuardarDomicilio) btnGuardarDomicilio.hidden = false;
+
+      setTimeout(() => {
+        if (domicilioInput) domicilioInput.focus();
+      }, 200);
+
+    } catch (e) {
+      console.error('Error OCR:', e);
+      if (domicilioProgress) domicilioProgress.hidden = true;
+      mostrarToast('Error en OCR: ' + e.message, 'error');
+      if (btnReintentarDomicilio) btnReintentarDomicilio.hidden = false;
+    }
+  }
+
+  function reintentarDomicilio() {
+    if (domicilioPreview) domicilioPreview.hidden = true;
+    if (domicilioResultado) domicilioResultado.hidden = true;
+    if (domicilioProgress) domicilioProgress.hidden = true;
+    if (btnCapturarDomicilio) btnCapturarDomicilio.hidden = false;
+    if (btnReintentarDomicilio) btnReintentarDomicilio.hidden = true;
+    if (btnGuardarDomicilio) btnGuardarDomicilio.hidden = true;
+    domicilioCapturado = null;
+    abrirModalDomicilio();
+  }
+
+  function guardarDomicilioDesdeModal() {
+    const valor = (domicilioInput?.value || '').trim();
+    if (!valor) {
+      mostrarToast('Escribí o capturá un domicilio', 'error');
+      return;
+    }
+
+    // Actualizar el resultado actual
+    if (ultimoResultado) {
+      ultimoResultado.domicilio = valor;
+    }
+
+    // Actualizar la UI
+    setTexto('r-domicilio', valor);
+
+    mostrarToast('✓ Domicilio guardado', 'success');
+    cerrarModalDomicilio();
+  }
+
+  if (btnDomicilio) btnDomicilio.addEventListener('click', abrirModalDomicilio);
+  if (btnCerrarModalDomicilio) btnCerrarModalDomicilio.addEventListener('click', cerrarModalDomicilio);
+  if (btnCancelarDomicilio) btnCancelarDomicilio.addEventListener('click', cerrarModalDomicilio);
+  if (btnCapturarDomicilio) btnCapturarDomicilio.addEventListener('click', capturarYLeerDomicilio);
+  if (btnReintentarDomicilio) btnReintentarDomicilio.addEventListener('click', reintentarDomicilio);
+  if (btnGuardarDomicilio) btnGuardarDomicilio.addEventListener('click', guardarDomicilioDesdeModal);
+
+  if (modalDomicilio) {
+    modalDomicilio.addEventListener('click', (e) => {
+      if (e.target === modalDomicilio) cerrarModalDomicilio();
+    });
+  }
 })();
