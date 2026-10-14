@@ -8,6 +8,11 @@
   const TEMA_KEY = 'tema_escaner';
   const SONIDO_KEY = 'sonido_escaner';
 
+  // Umbrales de auto-flash
+  const BRILLO_UMBRAL_BAJO = 80;   // si el brillo < 80 → activar flash
+  const BRILLO_UMBRAL_ALTO = 140;  // si el brillo > 140 → apagar flash
+  let autoFlashActivo = false;
+
   function log(msg) { if (DEBUG) console.log(msg); }
 
   // DOM
@@ -87,6 +92,20 @@
     if (cameraHint) cameraHint.style.opacity = '0';
   }
   function ocultarErrorCamara() { if (cameraError) cameraError.hidden = true; }
+
+  // MARCO DINÁMICO
+  function setEstadoMarco(estado) {
+    if (!scanFrame) return;
+    scanFrame.classList.remove('buscando', 'detectando', 'ok', 'error');
+    scanFrame.classList.add(estado);
+  }
+
+  // ANIMACIÓN AL DETECTAR
+  function animarCaptura() {
+    if (!scanFrame) return;
+    scanFrame.classList.add('capturando');
+    setTimeout(() => scanFrame.classList.remove('capturando'), 600);
+  }
 
   // SONIDO
   function reproducirSonidoExito() {
@@ -224,6 +243,31 @@
     overlay.addEventListener('click', (e) => { if (e.target === overlay) cerrar(); });
   }
 
+  // AUTO-FLASH
+  async function evaluarAutoFlash(brillo) {
+    if (!trackActual || !flashSoportado) return;
+
+    if (brillo < BRILLO_UMBRAL_BAJO && !flashEncendido && !autoFlashActivo) {
+      // Activar flash
+      try {
+        await trackActual.applyConstraints({ advanced: [{ torch: true }] });
+        flashEncendido = true;
+        autoFlashActivo = true;
+        if (btnFlash) btnFlash.classList.add('encendido');
+        log('🔦 Auto-flash ON (brillo ' + brillo.toFixed(0) + ')');
+      } catch (e) {}
+    } else if (brillo > BRILLO_UMBRAL_ALTO && flashEncendido && autoFlashActivo) {
+      // Apagar flash
+      try {
+        await trackActual.applyConstraints({ advanced: [{ torch: false }] });
+        flashEncendido = false;
+        autoFlashActivo = false;
+        if (btnFlash) btnFlash.classList.remove('encendido');
+        log('🔦 Auto-flash OFF (brillo ' + brillo.toFixed(0) + ')');
+      } catch (e) {}
+    }
+  }
+
   // CÁMARA
   async function iniciarCamara() {
     if (stream) return;
@@ -233,7 +277,16 @@
       return;
     }
     const configs = [
-      { video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false },
+      {
+        video: {
+          facingMode: { ideal: 'environment' },
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+          focusMode: 'continuous',
+          exposureMode: 'continuous'
+        },
+        audio: false
+      },
       { video: { facingMode: 'environment' }, audio: false },
       { video: { facingMode: { ideal: 'user' } }, audio: false },
       { video: true, audio: false }
@@ -280,7 +333,10 @@
       });
       ocultarErrorCamara();
       if (img) img.hidden = true;
-      if (scanFrame) scanFrame.classList.add('activo');
+      if (scanFrame) {
+        scanFrame.classList.add('activo');
+        setEstadoMarco('buscando');
+      }
       if (cameraHint) cameraHint.style.opacity = '1';
       if (btnCamara) btnCamara.hidden = true;
       if (btnRepetir) btnRepetir.hidden = true;
@@ -290,6 +346,7 @@
       const caps = trackActual.getCapabilities ? trackActual.getCapabilities() : {};
       flashSoportado = !!caps.torch;
       if (flashSoportado && btnFlash) btnFlash.classList.add('activo');
+      autoFlashActivo = false;
       iniciarEscaneoContinuo();
     } catch (err) {
       mostrarErrorCamara('Error al mostrar el video.');
@@ -302,43 +359,67 @@
     if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
     trackActual = null;
     flashEncendido = false;
+    autoFlashActivo = false;
     if (btnFlash) btnFlash.classList.remove('encendido', 'activo');
   }
 
   function iniciarEscaneoContinuo() {
     if (stopScan) stopScan();
     if (escaneoEstado) escaneoEstado.textContent = '🔍 Buscando código…';
+    setEstadoMarco('buscando');
+
     stopScan = DNIScanner.escanearContinuo(
       video, canvas,
       (texto) => exitoEscaneo(texto),
       () => {
         if (escaneoEstado) escaneoEstado.textContent = '⏱ No se detectó. Acercate más.';
+        setEstadoMarco('error');
         setStatus('Sin detección');
       },
-      { intervaloMs: 400, timeoutMs: 20000, anchoMax: 1280 }
+      {
+        intervaloMs: 400,
+        timeoutMs: 20000,
+        anchoMax: 1280,
+        usarROI: true,
+        onBrillo: (brillo) => evaluarAutoFlash(brillo)
+      }
     );
   }
 
   async function exitoEscaneo(texto) {
     if (stopScan) { stopScan(); stopScan = null; }
-    if (scanFrame) scanFrame.classList.remove('activo');
     if (cameraHint) cameraHint.style.opacity = '0';
+
+    // 🔥 Animación de captura
+    setEstadoMarco('ok');
+    animarCaptura();
+
+    // Apagar auto-flash si estaba activo
     if (flashEncendido && trackActual) {
       trackActual.applyConstraints({ advanced: [{ torch: false }] }).catch(() => {});
       flashEncendido = false;
+      autoFlashActivo = false;
       if (btnFlash) btnFlash.classList.remove('encendido');
     }
+
     const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
     if (img) { img.src = dataUrl; img.hidden = false; }
     video.hidden = true;
+
     if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
     trackActual = null;
+
+    // Esperar un poquito a que se vea la animación
+    await new Promise(r => setTimeout(r, 250));
+
+    if (scanFrame) scanFrame.classList.remove('activo');
 
     const paisDelDocumento = detectarPaisDelTexto(texto);
     const paisElegidoNombre = nombrePaisDesdeCodigo(paisSeleccionado);
 
     if (paisDelDocumento && paisDelDocumento !== paisSeleccionado) {
       const nombreDetectado = nombrePaisDesdeCodigo(paisDelDocumento);
+      setEstadoMarco('error');
       mostrarErrorDocumento('Documento incorrecto',
         `Elegiste <strong>${paisElegidoNombre}</strong> pero este documento parece ser de <strong>${nombreDetectado}</strong>.<br><br>Cambiá el país en el selector de arriba y volvé a escanear.`);
       if (estado) { estado.textContent = `⚠️ Este documento es de ${nombreDetectado}`; estado.classList.add('error'); estado.classList.remove('ok'); }
@@ -359,6 +440,7 @@
     }
 
     if (!datos || (!datos.dni && !datos.numero && !datos.apellido && !datos.nombre)) {
+      setEstadoMarco('error');
       if (paisDelDocumento) {
         const nd = nombrePaisDesdeCodigo(paisDelDocumento);
         mostrarErrorDocumento('Documento no reconocido',
@@ -696,6 +778,7 @@
         flashEncendido = !flashEncendido;
         await trackActual.applyConstraints({ advanced: [{ torch: flashEncendido }] });
         btnFlash.classList.toggle('encendido', flashEncendido);
+        autoFlashActivo = false; // el usuario tomó control
       } catch (e) {}
     });
   }
