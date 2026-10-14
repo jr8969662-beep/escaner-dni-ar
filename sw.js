@@ -1,4 +1,4 @@
-const CACHE_NAME = 'escaner-dni-v4';
+const CACHE_NAME = 'escaner-dni-v6';
 const ASSETS = [
   './',
   './index.html',
@@ -8,6 +8,8 @@ const ASSETS = [
   './js/parser.js',
   './js/scanner.js',
   './js/main.js',
+  './js/domicilio-ocr.js',
+  'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js'
   'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js'
   'https://cdn.jsdelivr.net/npm/@zxing/library@0.21.0/umd/index.min.js'
 ];
