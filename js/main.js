@@ -340,7 +340,7 @@
     return s;
   }
 
-  async function capturarMasNitido(videoEl, n = 3, pausaMs = 180) {
+  async function capturarMasNitido(videoEl, n = 5, pausaMs = 150) {
     let mejor = null;
     let mejorScore = -1;
     for (let i = 0; i < n; i++) {
