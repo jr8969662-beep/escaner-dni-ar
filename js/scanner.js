@@ -73,7 +73,8 @@ const DNIScanner = (() => {
   function escanearContinuo(video, canvas, onDetected, onTimeout, opciones = {}) {
     const intervaloMs = opciones.intervaloMs || 300;
     const timeoutMs = opciones.timeoutMs || 20000;
-    const anchoMax = opciones.anchoMax || 1920;
+    // 🔥 FORZAMOS ANCHO MAX A 1280 PARA EVITAR LAG
+    const anchoMax = opciones.anchoMax || 1280;
     const usarROI = opciones.usarROI !== false;
     const onBrillo = opciones.onBrillo;
     const framesConfirmacion = opciones.framesConfirmacion || 2;
@@ -111,7 +112,7 @@ const DNIScanner = (() => {
   }
 
   async function escanearImagen(imgElement) {
-    const maxAncho = 1920, escala = Math.min(1, maxAncho / imgElement.width);
+    const maxAncho = 1280, escala = Math.min(1, maxAncho / imgElement.width);
     const canvas = document.createElement('canvas');
     canvas.width = Math.round(imgElement.width * escala);
     canvas.height = Math.round(imgElement.height * escala);
