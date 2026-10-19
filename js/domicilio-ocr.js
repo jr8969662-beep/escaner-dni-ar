@@ -1,38 +1,27 @@
-/**
- * OCR del reverso del DNI argentino (Tesseract.js v5)
- *
- * - Texto (domicilio, lugar de nacimiento, CUIL): pasada 1 sobre la imagen completa.
- * - MRZ (vencimiento, nacionalidad): pasada 2 sobre el borde inferior, solo A-Z 0-9 <
- *   (se hace únicamente si la pasada 1 no encontró una MRZ verificada).
- */
-
 const DomicilioOCR = (() => {
   'use strict';
 
   let DEBUG = false;
   const log = (...args) => { if (DEBUG) console.log(...args); };
 
-  // ============================================
-  // CONFIGURACIÓN
-  // ============================================
-  const ANCHO_MIN = 1800;              // si la imagen es más angosta, se agranda hasta este ancho
-  const FRACCIONES_MRZ = [0.35, 0.5];  // porción inferior que se recorta para buscar la MRZ
+  // 🔥 SUBIMOS LA RESOLUCIÓN AL MÁXIMO (Mínimo 2600px de ancho)
+  const ANCHO_MIN = 2600; 
+  const FRACCIONES_MRZ = [0.35, 0.5];
 
   const PARAMS_TEXTO = {
     tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZÁÉÍÓÚÑabcdefghijklmnopqrstuvwxyzáéíóúñ0123456789 .,-°ºª/()<>:',
     preserve_interword_spaces: '1',
-    tessedit_pageseg_mode: '6'
+    tessedit_pageseg_mode: '6',
+    tessedit_ocr_engine_mode: '1' // Usar solo LSTM (el motor de IA más preciso)
   };
 
   const PARAMS_MRZ = {
     tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<',
     preserve_interword_spaces: '0',
-    tessedit_pageseg_mode: '6'
+    tessedit_pageseg_mode: '6',
+    tessedit_ocr_engine_mode: '1'
   };
 
-  // ============================================
-  // WORKER (una sola instancia, progreso por etapas)
-  // ============================================
   let workerPromise = null;
   let progresoCb = null;
   let etapaDesde = 0;
@@ -57,12 +46,9 @@ const DomicilioOCR = (() => {
     if (!workerPromise) return;
     const p = workerPromise;
     workerPromise = null;
-    try { const w = await p; await w.terminate(); } catch (e) { /* nada */ }
+    try { const w = await p; await w.terminate(); } catch (e) {}
   }
 
-  // ============================================
-  // IMAGEN: agrandar, gris y estirar contraste
-  // ============================================
   function aElemento(fuente) {
     if (typeof fuente !== 'string') return Promise.resolve(fuente);
     return new Promise((resolve, reject) => {
@@ -73,10 +59,11 @@ const DomicilioOCR = (() => {
     });
   }
 
+  // Preparar imagen con escala masiva
   function preprocesar(el) {
     const w0 = el.videoWidth || el.naturalWidth || el.width;
     const h0 = el.videoHeight || el.naturalHeight || el.height;
-    const escala = w0 < ANCHO_MIN ? Math.min(ANCHO_MIN / w0, 3) : 1;
+    const escala = w0 < ANCHO_MIN ? Math.min(ANCHO_MIN / w0, 4) : 1; // Escalar hasta 4x
     const w = Math.round(w0 * escala);
     const h = Math.round(h0 * escala);
 
@@ -91,7 +78,6 @@ const DomicilioOCR = (() => {
     const imgData = ctx.getImageData(0, 0, w, h);
     const d = imgData.data;
 
-    // Escala de grises + histograma
     const hist = new Uint32Array(256);
     for (let i = 0; i < d.length; i += 4) {
       const g = (0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]) | 0;
@@ -99,13 +85,12 @@ const DomicilioOCR = (() => {
       hist[g]++;
     }
 
-    // Estirar contraste entre los percentiles 1 % y 99 % (se adapta a la luz de cada foto)
     const total = w * h;
     let acc = 0, lo = 0, hi = 255;
     for (let g = 0; g < 256; g++) { acc += hist[g]; if (acc >= total * 0.01) { lo = g; break; } }
     acc = 0;
     for (let g = 255; g >= 0; g--) { acc += hist[g]; if (acc >= total * 0.01) { hi = g; break; } }
-    if (hi - lo < 30) { lo = 0; hi = 255; } // imagen casi plana: no estirar
+    if (hi - lo < 30) { lo = 0; hi = 255; }
     const k = 255 / (hi - lo);
 
     for (let i = 0; i < d.length; i += 4) {
@@ -125,9 +110,6 @@ const DomicilioOCR = (() => {
     return r;
   }
 
-  // ============================================
-  // TEXTO: etiquetas tolerantes a errores de OCR
-  // ============================================
   const CLASES = {
     A: '[A4ÁÀ]', E: '[E3ÉÈ]', I: '[I1LÍÌ]', L: '[L1I]', O: '[O0ÓÒ]',
     U: '[UÚÜ]', S: '[S5]', B: '[B8]', G: '[G6]', Z: '[Z2]'
@@ -147,7 +129,38 @@ const DomicilioOCR = (() => {
     return (texto || '')
       .toUpperCase()
       .replace(/[|_=~`]+/g, ' ')
-      .replace(/\s+/g, ' ')   // colapsa saltos de línea
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  // 🔥 DICCIONARIO DE CORRECCIÓN ORTOGRÁFICA
+  function corregirTextoDomicilio(v) {
+    let txt = v;
+    
+    // Provincias Argentinas (para evitar errores de tipeo del OCR)
+    const provincias = ['SALTA', 'BUENOS AIRES', 'CÓRDOBA', 'SANTA FE', 'MENDOZA', 'TUCUMÁN', 'ENTRE RÍOS', 'CHACO', 'CORRIENTES', 'MISIONES', 'SANTIAGO DEL ESTERO', 'SAN JUAN', 'JUJUY', 'RÍO NEGRO', 'NEUQUÉN', 'FORMOSA', 'CHUBUT', 'SAN LUIS', 'CATAMARCA', 'LA RIOJA', 'LA PAMPA', 'SANTA CRUZ', 'TIERRA DEL FUEGO'];
+    provincias.forEach(p => {
+      // Si lee "5ALTA" o "S4LTA", lo corrige a "SALTA"
+      const regexProv = new RegExp(p.replace('A', '[A4]').replace('E', '[E3]').replace('I', '[I1]').replace('O', '[O0]').replace('S', '[S5]'), 'g');
+      txt = txt.replace(regexProv, p);
+    });
+
+    // Correcciones típicas del DNI
+    return txt
+      .replace(/\bPABLM\b/gi, 'PABLO')
+      .replace(/\bPABL0\b/gi, 'PABLO')
+      .replace(/\bNORT\b/gi, 'NORTE')
+      .replace(/\bCAJ\b/gi, 'CAPITAL')
+      .replace(/\bCAPITA1\b/gi, 'CAPITAL')
+      .replace(/\bLOT\b/gi, 'LOTE')
+      .replace(/\bMZA\b/gi, 'MANZANA')
+      .replace(/\bMZ\b/gi, 'MANZANA')
+      .replace(/\bB\s*([°º])\s*/gi, 'BARRIO ')
+      .replace(/\bDEPT0\b/gi, 'DEPTO')
+      .replace(/\bP1S0\b/gi, 'PISO')
+      .replace(/\s*-\s*/g, ' - ')
+      .replace(/--+/g, '-')
+      .replace(/\s+/g, ' ')
       .trim();
   }
 
@@ -167,15 +180,20 @@ const DomicilioOCR = (() => {
   function titulo(s) {
     return s.toLowerCase()
       .replace(/(^|\s)(\S)/g, (_, a, b) => a + b.toUpperCase())
-      .replace(/\bS\/n\b/g, 'S/N');
+      .replace(/\bS\/n\b/g, 'S/N')
+      .replace(/\bIi\b/g, 'II')
+      .replace(/\bIii\b/g, 'III');
   }
 
   function extraerCampo(texto, etiqueta, stops) {
     const t = normalizar(texto);
-    const re = new RegExp(`${etiqueta}[:\\s./-]*(.*?)(?=\\s(?:${stops})|<|$)`, 'i');
+    const re = new RegExp(`${etiqueta}[:\\s.,/\\-]*(.*?)(?=\\s(?:${stops})|<|$)`, 'i');
     const m = re.exec(t);
     if (!m) return null;
-    const v = limpiarValor(m[1]);
+    
+    let v = limpiarValor(m[1]);
+    v = corregirTextoDomicilio(v);
+    
     return valorValido(v) ? titulo(v) : null;
   }
 
@@ -184,12 +202,11 @@ const DomicilioOCR = (() => {
   }
 
   function extraerLugarNacimiento(texto) {
-    return extraerCampo(texto, L_LUGAR_NAC, STOPS_LUGAR);
+    let res = extraerCampo(texto, L_LUGAR_NAC, STOPS_LUGAR);
+    if (!res) res = extraerCampo(texto, tol('NACIMIENTO'), STOPS_LUGAR);
+    return res;
   }
 
-  // ============================================
-  // CUIL
-  // ============================================
   const PREFIJOS_CUIL = ['20', '23', '24', '27', '30', '33', '34'];
   const PESOS_CUIL = [5, 4, 3, 2, 7, 6, 5, 4, 3, 2];
 
@@ -221,19 +238,11 @@ const DomicilioOCR = (() => {
     };
 
     const i = t.search(new RegExp(L_CUIL, 'i'));
-    const cercano = i >= 0
-      ? t.slice(i, i + 40).replace(/[OQDIL|ZSBG]/g, ch => A_DIGITO_CUIL[ch] || ch)
-      : '';
+    const cercano = i >= 0 ? t.slice(i, i + 40).replace(/[OQDIL|ZSBG]/g, ch => A_DIGITO_CUIL[ch] || ch) : '';
 
-    return (cercano && buscar(cercano, true))
-      || buscar(t, true)
-      || (cercano && buscar(cercano, false))
-      || null;
+    return (cercano && buscar(cercano, true)) || buscar(t, true) || (cercano && buscar(cercano, false)) || null;
   }
 
-  // ============================================
-  // MRZ
-  // ============================================
   const NACIONALIDADES = {
     ARG: 'ARGENTINA', CHL: 'CHILENA', URY: 'URUGUAYA', PRY: 'PARAGUAYA',
     PER: 'PERUANA', BOL: 'BOLIVIANA', COL: 'COLOMBIANA', ECU: 'ECUATORIANA',
@@ -271,9 +280,7 @@ const DomicilioOCR = (() => {
     return {
       fechaVencimiento: `20${yy}-${mm}-${dd}`,
       nacionalidad: NACIONALIDADES[pais] || pais,
-      mrzVerificada:
-        String(digitoControl(nacim)) === dcNacim &&
-        String(digitoControl(yy + mm + dd)) === dcVenc
+      mrzVerificada: String(digitoControl(nacim)) === dcNacim && String(digitoControl(yy + mm + dd)) === dcVenc
     };
   }
 
@@ -281,10 +288,7 @@ const DomicilioOCR = (() => {
     const vacio = { fechaVencimiento: null, nacionalidad: null, mrzVerificada: null };
     if (!texto) return vacio;
 
-    const lineas = texto.toUpperCase().split(/[\r\n]+/)
-      .map(l => l.replace(/[^A-Z0-9<]/g, ''))
-      .filter(l => l.length >= 20);
-
+    const lineas = texto.toUpperCase().split(/[\r\n]+/).map(l => l.replace(/[^A-Z0-9<]/g, '')).filter(l => l.length >= 20);
     const hallazgos = [];
     for (const l of lineas) {
       for (const cand of [l, repararLinea2(l)]) {
@@ -295,9 +299,6 @@ const DomicilioOCR = (() => {
     return hallazgos.find(h => h.mrzVerificada) || hallazgos[0] || vacio;
   }
 
-  // ============================================
-  // LECTURA COMPLETA
-  // ============================================
   async function leer(fuente, pais = 'arg', onProgress, contexto = {}) {
     void pais;
     progresoCb = typeof onProgress === 'function' ? onProgress : null;
