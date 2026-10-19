@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Panel de Escaneos - Admin</title>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f1116; color: #eef0f4; padding: 20px; margin: 0; }
+    h1 { color: #4f7cff; text-align: center; margin-bottom: 30px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 24px; margin-top: 20px; }
+    .card { background: #14171e; border: 1px solid #232833; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
+    .card img { width: 100%; height: 200px; object-fit: cover; border-bottom: 2px solid #4f7cff; background: #000; }
+    .card-content { padding: 20px; }
+    .card h3 { margin: 0 0 12px; color: #fff; font-size: 1.2rem; border-bottom: 1px solid #334155; padding-bottom: 8px; }
+    .card p { margin: 6px 0; font-size: 0.9rem; color: #94a3b8; display: flex; justify-content: space-between; }
+    .card p span { color: #eef0f4; font-weight: 600; text-align: right; max-width: 60%; word-break: break-word; }
+    .loading { text-align: center; font-size: 1.2rem; margin-top: 50px; color: #94a3b8; }
+    .error { color: #ef4444; text-align: center; background: rgba(239,68,68,0.1); padding: 15px; border-radius: 8px; margin-bottom: 20px; display: none; }
+  </style>
+</head>
+<body>
+  <h1>📸 Panel de Documentos Escaneados</h1>
+  <div id="error" class="error"></div>
+  <div id="loading" class="loading">Cargando datos desde Supabase...</div>
+  <div id="grid" class="grid"></div>
+
+  <script>
+    // REEMPLAZÁ ESTOS DATOS CON LOS DE TU PROYECTO EN SUPABASE
+    const SUPABASE_URL = 'https://TU_SUPABASE_URL.supabase.co';
+    const SUPABASE_KEY = 'TU_SUPABASE_ANON_KEY';
+    const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+    async function cargarDatos() {
+      const { data, error } = await supabaseClient
+        .from('escaneos')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      document.getElementById('loading').style.display = 'none';
+
+      if (error) {
+        const errorDiv = document.getElementById('error');
+        errorDiv.textContent = 'Error al cargar: ' + error.message;
+        errorDiv.style.display = 'block';
+        return;
+      }
+
+      const grid = document.getElementById('grid');
+      if (data.length === 0) {
+        grid.innerHTML = '<p style="text-align:center; width:100%; grid-column: 1 / -1;">No hay documentos escaneados aún.</p>';
+        return;
+      }
+
+      data.forEach(item => {
+        const fecha = new Date(item.created_at).toLocaleString('es-AR');
+        const d = item.datos || {};
+        const card = document.createElement('div');
+        card.className = 'card';
+        card.innerHTML = `
+          <img src="${item.foto_url}" alt="DNI Escaneado" loading="lazy">
+          <div class="card-content">
+            <h3>${item.nombre_completo}</h3>
+            <p>DNI: <span>${item.dni}</span></p>
+            <p>País: <span>${item.pais}</span></p>
+            <p>Nacimiento: <span>${d.fechaNacimiento || '—'}</span></p>
+            <p>Vencimiento: <span>${d.fechaVencimiento || '—'}</span></p>
+            <p>Domicilio: <span>${d.domicilio || '—'}</span></p>
+            <p>Escaneado el: <span>${fecha}</span></p>
+          </div>
+        `;
+        grid.appendChild(card);
+      });
+    }
+
+    cargarDatos();
+  </script>
+</body>
+</html>
