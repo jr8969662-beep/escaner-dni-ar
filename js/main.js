@@ -1,6 +1,15 @@
 (() => {
   'use strict';
 
+  // --- CONFIGURACIÓN DE SUPABASE ---
+  // REEMPLAZÁ ESTOS DATOS CON LOS DE TU PROYECTO EN SUPABASE
+  const SUPABASE_URL = 'https://TU_SUPABASE_URL.supabase.co';
+  const SUPABASE_KEY = 'TU_SUPABASE_ANON_KEY';
+  let supabaseClient = null;
+  if (typeof supabase !== 'undefined') {
+    supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+  }
+
   const DEBUG = false;
   const STORAGE_KEY = 'escaner_dni_historial';
   const MAX_HISTORIAL = 50;
@@ -79,6 +88,7 @@
   let flashSoportado = false;
   let stopScan = null;
   let ultimoResultado = null;
+  let ultimaFotoDataUrl = null; // <--- NUEVO: Guarda la foto para subir a Supabase
   let paisSeleccionado = localStorage.getItem(PAIS_KEY) || 'arg';
   const sonidoActivo = localStorage.getItem(SONIDO_KEY) !== 'false';
   
@@ -300,9 +310,6 @@
     stopScan = DNIScanner.escanearContinuo(video, canvas, (texto) => exitoEscaneo(texto), () => { if (escaneoEstado) escaneoEstado.textContent = '⏱ No se detectó. Acercate más.'; setEstadoMarco('error'); setStatus('Sin detección'); }, { intervaloMs: 300, timeoutMs: 20000, anchoMax: 1280, usarROI: true, framesConfirmacion: 2, onBrillo: (brillo) => evaluarAutoFlash(brillo) });
   }
 
-  // ----------------------------------------------------------------
-  // A) FUNCIONES NUEVAS (PARCHES)
-  // ----------------------------------------------------------------
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, c =>
       ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -323,8 +330,7 @@
     const w = 480;
     const h = Math.max(2, Math.round(c.height * w / c.width));
     const t = document.createElement('canvas');
-    t.width = w;
-    t.height = h;
+    t.width = w; t.height = h;
     const x = t.getContext('2d', { willReadFrequently: true });
     x.drawImage(c, 0, 0, w, h);
     const d = x.getImageData(0, 0, w, h).data;
@@ -361,13 +367,15 @@
     return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : '';
   }
 
-  // ----------------------------------------------------------------
-  // EXITO ESCANEO (Modificado con parsearSeguro)
-  // ----------------------------------------------------------------
   async function exitoEscaneo(texto) {
     if (stopScan) { stopScan(); stopScan = null; } if (cameraHint) cameraHint.style.opacity = '0'; setEstadoMarco('ok'); animarCaptura();
     if (flashEncendido && trackActual) { trackActual.applyConstraints({ advanced: [{ torch: false }] }).catch(() => {}); flashEncendido = false; autoFlashActivo = false; if (btnFlash) btnFlash.classList.remove('encendido'); }
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.8); if (img) { img.src = dataUrl; img.hidden = false; } video.hidden = true;
+    
+    // GUARDAMOS LA FOTO PARA SUPABASE
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.8); 
+    ultimaFotoDataUrl = dataUrl;
+    
+    if (img) { img.src = dataUrl; img.hidden = false; } video.hidden = true;
     if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; } trackActual = null; if (zoomControl) zoomControl.hidden = true;
     await new Promise(r => setTimeout(r, 250)); if (scanFrame) scanFrame.classList.remove('activo');
     const paisDelDocumento = detectarPaisDelTexto(texto); const paisElegidoNombre = nombrePaisDesdeCodigo(paisSeleccionado);
@@ -380,7 +388,6 @@
       destacarChipPais(paisDelDocumento); reproducirSonidoError(); vibrarError(); return;
     }
     
-    // AQUI USAMOS parsearSeguro
     const datos = parsearSeguro(texto);
     
     if (!datos || (!datos.dni && !datos.numero && !datos.apellido && !datos.nombre)) {
@@ -394,9 +401,6 @@
     if (escaneoEstado) escaneoEstado.textContent = '✅ Escaneo OK'; setStatus('Escaneo OK', 'active'); if (btnRepetir) btnRepetir.hidden = false; reproducirSonidoExito(); vibrarExito();
   }
 
-  // ----------------------------------------------------------------
-  // RENDER, COPIAR, DESCARGAR, HISTORIAL
-  // ----------------------------------------------------------------
   function setTexto(id, valor) { const el = document.getElementById(id); if (!el) return; el.textContent = (valor === null || valor === undefined || valor === '') ? '—' : String(valor); el.classList.remove('ok', 'err'); }
   function setBool(id, valor, sSi, sNo) { const el = document.getElementById(id); if (!el) return; if (valor === true) { el.textContent = sSi; el.classList.add('ok'); el.classList.remove('err'); } else if (valor === false) { el.textContent = sNo; el.classList.add('err'); el.classList.remove('ok'); } else { el.textContent = '—'; el.classList.remove('ok', 'err'); } }
   
@@ -420,9 +424,64 @@
   function leerHistorial() { try { const raw = localStorage.getItem(STORAGE_KEY); return raw ? JSON.parse(raw) : []; } catch (e) { return []; } }
   function escribirHistorial(arr) { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(arr)); } catch (e) {} }
   function actualizarContadorHistorial() { const arr = leerHistorial(); if (historialCount) historialCount.textContent = arr.length; if (btnHistorial) btnHistorial.style.display = arr.length > 0 ? 'flex' : 'none'; }
-  function guardarEnHistorial() { if (!ultimoResultado) return; const arr = leerHistorial(); arr.unshift({ id: Date.now(), fecha: new Date().toISOString(), datos: ultimoResultado }); if (arr.length > MAX_HISTORIAL) arr.length = MAX_HISTORIAL; escribirHistorial(arr); actualizarContadorHistorial(); mostrarToast('✓ Guardado en historial', 'success'); }
   
-  // PATCH D: renderHistorial protegido
+  // 🔥 GUARDAR EN SUPABASE
+  async function guardarEnHistorial() {
+    if (!ultimoResultado) return;
+
+    // 1. Guardar en localStorage (historial local)
+    const arr = leerHistorial();
+    arr.unshift({ id: Date.now(), fecha: new Date().toISOString(), datos: ultimoResultado });
+    if (arr.length > MAX_HISTORIAL) arr.length = MAX_HISTORIAL;
+    escribirHistorial(arr);
+    actualizarContadorHistorial();
+
+    // 2. Subir a Supabase si está configurado
+    if (supabaseClient && ultimaFotoDataUrl) {
+      mostrarToast('Guardando en la nube...', 'success');
+      
+      try {
+        const nombreArchivo = `dni_${Date.now()}.jpg`;
+        const respuestaFetch = await fetch(ultimaFotoDataUrl);
+        const blob = await respuestaFetch.blob();
+
+        // Subir foto
+        const { data: uploadData, error: uploadError } = await supabaseClient
+          .storage
+          .from('fotos-dni')
+          .upload(nombreArchivo, blob, { contentType: 'image/jpeg' });
+
+        if (uploadError) throw uploadError;
+
+        // Obtener URL pública
+        const { data: urlData } = supabaseClient
+          .storage
+          .from('fotos-dni')
+          .getPublicUrl(nombreArchivo);
+
+        // Insertar en la tabla
+        const { error: dbError } = await supabaseClient
+          .from('escaneos')
+          .insert([{
+            dni: ultimoResultado.dni || ultimoResultado.numero || 'N/A',
+            nombre_completo: ultimoResultado.nombreCompleto || 'N/A',
+            pais: ultimoResultado.pais || 'ARG',
+            datos: ultimoResultado,
+            foto_url: urlData.publicUrl
+          }]);
+
+        if (dbError) throw dbError;
+
+        mostrarToast('✓ Guardado en la base de datos', 'success');
+      } catch (e) {
+        console.error('Error Supabase:', e);
+        mostrarToast('Guardado local, falló en la nube', 'error');
+      }
+    } else {
+      mostrarToast('✓ Guardado en historial local', 'success');
+    }
+  }
+
   function renderHistorial() {
     if (!historialLista) return;
     const arr = leerHistorial();
@@ -454,9 +513,6 @@
   function abrirHistorial() { renderHistorial(); if (modalHistorial) modalHistorial.hidden = false; }
   function cerrarHistorial() { if (modalHistorial) modalHistorial.hidden = true; }
 
-  // ----------------------------------------------------------------
-  // SUBIR IMAGEN (Modificado E3 + E4)
-  // ----------------------------------------------------------------
   async function procesarImagen(file) {
     const reader = new FileReader();
     reader.onload = async (e) => {
@@ -472,8 +528,8 @@
         const paisDelDocumento = detectarPaisDelTexto(texto); const paisElegidoNombre = nombrePaisDesdeCodigo(paisSeleccionado);
         if (paisDelDocumento && paisDelDocumento !== paisSeleccionado) { const nd = nombrePaisDesdeCodigo(paisDelDocumento); mostrarErrorDocumento('Documento incorrecto', `Elegiste <strong>${paisElegidoNombre}</strong> pero este documento parece ser de <strong>${nd}</strong>.`); if (estado) { estado.textContent = `⚠️ Este documento es de ${nd}`; estado.classList.add('error'); } setStatus('Documento incorrecto', 'error'); if (btnRepetir) btnRepetir.hidden = false; destacarChipPais(paisDelDocumento); reproducirSonidoError(); vibrarError(); return; }
         
-        // PATCH E3
         const datos = parsearSeguro(texto);
+        ultimaFotoDataUrl = src; // Guardar la foto subida para Supabase
         
         if (datos && (datos.dni || datos.numero || datos.apellido || datos.nombre)) { render(datos); if (estado) { estado.textContent = '✓ ' + (datos.nombreCompleto || datos.dni || datos.numero); estado.classList.remove('error'); estado.classList.add('ok'); } if (escaneoEstado) escaneoEstado.textContent = '✅ Escaneo OK'; setStatus('Escaneo OK', 'active'); if (btnRepetir) btnRepetir.hidden = false; reproducirSonidoExito(); vibrarExito(); return; }
         mostrarErrorDocumento('Documento no reconocido', `No pudimos interpretar este código como un documento de ${paisElegidoNombre}.`); if (estado) { estado.textContent = '⚠️ No se pudieron extraer datos'; estado.classList.add('error'); } setStatus('Sin datos', 'error'); if (btnRepetir) btnRepetir.hidden = false; reproducirSonidoError(); vibrarError();
@@ -496,14 +552,10 @@
     });
   }
 
-  // ==========================================
-  // MODAL REVERSO (OCR)
-  // ==========================================
   async function activarLinternaReverso() { if (!domicilioTrack || !domicilioFlashSoportado) return; try { await domicilioTrack.applyConstraints({ advanced: [{ torch: true }] }); domicilioFlashEncendido = true; if (domicilioFlashBtn) domicilioFlashBtn.classList.add('encendido'); } catch (e) {} }
   async function apagarLinternaReverso() { if (!domicilioTrack || !domicilioFlashEncendido) return; try { await domicilioTrack.applyConstraints({ advanced: [{ torch: false }] }); domicilioFlashEncendido = false; if (domicilioFlashBtn) domicilioFlashBtn.classList.remove('encendido'); } catch (e) {} }
   async function toggleLinternaReverso() { if (!domicilioTrack || !domicilioFlashSoportado) return; if (domicilioFlashEncendido) await apagarLinternaReverso(); else await activarLinternaReverso(); }
   
-  // PATCH E1 + E2
   async function abrirModalDomicilio() {
     if (!ultimoResultado) { mostrarToast('Primero escaneá el frente', 'error'); return; }
     if (modalDomicilio) modalDomicilio.hidden = false; if (domicilioPreview) domicilioPreview.hidden = true; if (domicilioResultado) domicilioResultado.hidden = true; if (domicilioProgress) domicilioProgress.hidden = true;
@@ -529,7 +581,6 @@
     if (modalDomicilio) modalDomicilio.hidden = true; domicilioTrack = null; domicilioFlashSoportado = false; domicilioFlashEncendido = false; if (domicilioFlashBtn) domicilioFlashBtn.classList.remove('encendido');
   }
 
-  // PATCH B: capturarYLeerDomicilio
   async function capturarYLeerDomicilio() {
     if (!domicilioVideo || !domicilioVideo.srcObject) return;
     if (!domicilioVideo.videoWidth) { mostrarToast('La cámara no está lista', 'error'); return; }
@@ -590,7 +641,6 @@
 
   async function reintentarDomicilio() { if (domicilioPreview) domicilioPreview.hidden = true; if (domicilioResultado) domicilioResultado.hidden = true; if (domicilioProgress) domicilioProgress.hidden = true; if (btnCapturarDomicilio) btnCapturarDomicilio.hidden = false; if (btnReintentarDomicilio) btnReintentarDomicilio.hidden = true; if (btnGuardarDomicilio) btnGuardarDomicilio.hidden = true; await abrirModalDomicilio(); }
   
-  // PATCH C: guardarDomicilioDesdeModal
   function guardarDomicilioDesdeModal() {
     if (!ultimoResultado) return;
     const val = (el) => ((el && el.value) || '').trim();
@@ -631,7 +681,6 @@
     cerrarModalDomicilio();
   }
 
-  // EVENTOS
   if (btnCamara) btnCamara.addEventListener('click', iniciarCamara);
   if (btnRetryCamara) btnRetryCamara.addEventListener('click', iniciarCamara);
   if (btnRepetir) { btnRepetir.addEventListener('click', async () => { if (resultado) resultado.hidden = true; if (img) { img.hidden = true; img.src = ''; } if (video) video.hidden = false; btnRepetir.hidden = true; if (estado) { estado.textContent = 'Apuntá al código del documento.'; estado.classList.remove('ok', 'error'); } if (escaneoEstado) escaneoEstado.textContent = ''; await iniciarCamara(); }); }
