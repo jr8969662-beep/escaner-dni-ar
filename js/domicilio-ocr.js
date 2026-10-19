@@ -22,7 +22,7 @@ const DomicilioOCR = (() => {
       await worker.setParameters({
         tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZÁÉÍÓÚÑabcdefghijklmnopqrstuvwxyz0123456789 .,-°ºª/()<>:',
         preserve_interword_spaces: '1',
-        tessedit_pageseg_mode: '6' // Bloque de texto
+        tessedit_pageseg_mode: '6' // Bloque de texto uniforme
       });
       workerListo = true;
       console.log('✅ Tesseract listo');
@@ -34,78 +34,61 @@ const DomicilioOCR = (() => {
   }
 
   // ============================================
-  // PREPROCESAR: Leer toda la tarjeta (incluyendo MRZ)
+  // PREPROCESAR: Imagen completa, alto contraste
   // ============================================
   function preprocesarImagen(fuente) {
-    const canvasOriginal = document.createElement('canvas');
+    const canvas = document.createElement('canvas');
+    // Usar el tamaño nativo (o video) sin recortar
     const w = fuente.videoWidth || fuente.width;
     const h = fuente.videoHeight || fuente.height;
-    canvasOriginal.width = w;
-    canvasOriginal.height = h;
-    const ctxOrig = canvasOriginal.getContext('2d', { willReadFrequently: true });
-    ctxOrig.drawImage(fuente, 0, 0, w, h);
-
-    // Recortamos el 80% superior (dejamos afuera solo el borde inferior con el QR).
-    // Esto asegura que la MRZ entre en la foto.
-    const recorte = {
-      x: Math.round(w * 0.05),
-      y: Math.round(h * 0.05),
-      ancho: Math.round(w * 0.90),
-      alto: Math.round(h * 0.80)
-    };
-
-    const canvas = document.createElement('canvas');
-    const escala = 2.0; // Escalar x2 es suficiente y más rápido
-    canvas.width = recorte.ancho * escala;
-    canvas.height = recorte.alto * escala;
+    canvas.width = w;
+    canvas.height = h;
+    
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = 'high';
-    ctx.drawImage(
-      canvasOriginal,
-      recorte.x, recorte.y, recorte.ancho, recorte.alto,
-      0, 0, canvas.width, canvas.height
-    );
+    ctx.drawImage(fuente, 0, 0, w, h);
 
-    // Binarizar
-    const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const imgData = ctx.getImageData(0, 0, w, h);
     const data = imgData.data;
-    let sumaGris = 0, muestras = 0;
-    for (let i = 0; i < data.length; i += 40) {
-      const gris = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
-      sumaGris += gris; muestras++;
-    }
-    const umbral = muestras > 0 ? sumaGris / muestras : 128;
 
+    // Aumentar contraste y pasar a escala de grises (sin binarizar a B/N puro)
     for (let i = 0; i < data.length; i += 4) {
       let gris = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
-      gris = (gris - 128) * 1.5 + 128;
-      const v = gris > umbral ? 255 : 0;
-      data[i] = data[i + 1] = data[i + 2] = v;
+      // Contraste fuerte pero manteniendo los grises para no perder letras finas
+      gris = (gris - 128) * 1.8 + 128; 
+      gris = Math.max(0, Math.min(255, gris));
+      data[i] = data[i + 1] = data[i + 2] = gris;
     }
     ctx.putImageData(imgData, 0, 0);
 
-    return canvas.toDataURL('image/png');
+    return canvas.toDataURL('image/jpeg', 0.95);
   }
 
   // ============================================
-  // PARSER: DOMICILIO (Tolerante a errores)
+  // PARSER: DOMICILIO (Tolerante a multi-línea)
   // ============================================
   function extraerDomicilio(texto) {
     if (!texto) return null;
-    // Normalizar texto: corregir errores comunes de OCR
+    
+    // Normalizar texto
     let limpio = texto.toUpperCase()
-      .replace(/D[O0]M[I1L]C[I1L][I1L][O0]/g, 'DOMICILIO')
-      .replace(/LUG[4A]R/g, 'LUGAR')
-      .replace(/N[4A]C[I1L]M[I1L]ENT[O0]/g, 'NACIMIENTO')
       .replace(/[|_=~`]+/g, ' ')
-      .replace(/\s+/g, ' '); // Colapsar saltos de línea en un solo espacio
+      .replace(/\s{2,}/g, ' ');
 
-    // Buscar desde "DOMICILIO" hasta "LUGAR" o "NACIMIENTO"
-    const match = limpio.match(/DOMICILIO[:\s]*(.*?)(?=LUGAR|NACIMIENTO|FECHA|NACIONALIDAD|CUIL|TRAMITE|EJEMPLAR|$)/i);
+    // Buscar DOMICILIO (tolerando errores de OCR como D0MICILI0)
+    const match = limpio.match(/D[O0]M[I1L]C[I1L][I1L][O0][:\s]*(.*?)(?=\s(?:LUGAR|N[4A]C[I1L]M|FECHA|NACIONALIDAD|CUIL|TRAMITE|EJEMPLAR|IDARG)|$)/i);
     
     if (match && match[1]) {
       let dom = match[1].trim();
+      // Si el texto se cortó muy corto, buscamos la siguiente línea que contenga la ciudad
+      if (dom.length > 5 && dom.length < 30) {
+        const resto = limpio.substring(match.index + match[0].length);
+        // Tomar lo que sigue hasta encontrar una palabra clave
+        const continuacion = resto.split(/(?:LUGAR|N[4A]C[I1L]M|CUIL|TRAMITE|EJEMPLAR)/i)[0].trim();
+        if (continuacion.length > 3 && continuacion.length < 50) {
+          dom += ' - ' + continuacion;
+        }
+      }
+      
       if (dom.length > 5 && !dom.includes('<<<')) {
         return dom.toLowerCase().replace(/(?:^|\s)\S/g, c => c.toUpperCase());
       }
@@ -118,12 +101,9 @@ const DomicilioOCR = (() => {
   // ============================================
   function extraerLugarNacimiento(texto) {
     if (!texto) return null;
-    let limpio = texto.toUpperCase()
-      .replace(/LUG[4A]R/g, 'LUGAR')
-      .replace(/N[4A]C[I1L]M[I1L]ENT[O0]/g, 'NACIMIENTO')
-      .replace(/\s+/g, ' ');
+    let limpio = texto.toUpperCase().replace(/\s{2,}/g, ' ');
 
-    const match = limpio.match(/(?:LUGAR\s*DE\s*NACIMIENTO|NACIDO\s*EN)[:\s]*(.*?)(?=DOMICILIO|FECHA|NACIONALIDAD|CUIL|IDARG|$)/i);
+    const match = limpio.match(/(?:LUG[4A]R\s*DE\s*N[4A]C[I1L]M[I1L]ENT[O0]|NACIDO\s*EN)[:\s]*(.*?)(?=\s(?:DOMICILIO|FECHA|NACIONALIDAD|CUIL|IDARG)|$)/i);
     if (match && match[1]) {
       let lugar = match[1].trim();
       if (lugar.length > 3 && !lugar.includes('<<<')) {
@@ -149,38 +129,41 @@ const DomicilioOCR = (() => {
   function extraerDesdeMRZ(texto) {
     if (!texto) return { fechaVencimiento: null, nacionalidad: null };
     
-    // Buscar las 3 líneas de la MRZ (empiezan con ID o terminan con <<<)
+    // Limpiar el texto para buscar la MRZ (solo letras, números y <)
     const lineas = texto.toUpperCase().split(/[\n\r]+/).map(l => l.replace(/[^A-Z0-9<]/g, '')).filter(l => l.length >= 20);
     
-    if (lineas.length >= 3) {
-      // La segunda línea de la MRZ tiene el formato:
-      // FechaNac(6) + Check(1) + Sexo(1) + FechaVenc(6) + Check(1) + Nacionalidad(3)
-      // Ej: 0208150M3601073ARG...
-      const l2 = lineas[1];
-      const fechaVencRaw = l2.substring(8, 14); // Posición 8 a 13 (YYMMDD)
-      const nacRaw = l2.substring(15, 18).replace(/</g, ''); // Posición 15 a 17 (ARG)
+    // La línea 2 de la MRZ siempre tiene una M o F en el medio, rodeada de números
+    const mrzLine = lineas.find(l => /\d{6}[0-9<][MF]\d{6}[0-9<][A-Z]{3}/.test(l));
 
-      let vencimiento = null;
-      if (/^\d{6}$/.test(fechaVencRaw)) {
-        const yy = parseInt(fechaVencRaw.substring(0, 2));
-        const yyyy = yy > 30 ? 1900 + yy : 2000 + yy;
-        vencimiento = `${yyyy}-${fechaVencRaw.substring(2, 4)}-${fechaVencRaw.substring(4, 6)}`;
+    if (mrzLine) {
+      // Formato: 0208150 M 3601073 ARG
+      const idx = mrzLine.search(/[MF]/);
+      if (idx !== -1) {
+        const fechaVencRaw = mrzLine.substring(idx + 1, idx + 7); // YYMMDD
+        const nacRaw = mrzLine.substring(idx + 8, idx + 11); // ARG
+
+        let vencimiento = null;
+        if (/^\d{6}$/.test(fechaVencRaw)) {
+          const yy = parseInt(fechaVencRaw.substring(0, 2));
+          const yyyy = yy > 30 ? 1900 + yy : 2000 + yy;
+          vencimiento = `${yyyy}-${fechaVencRaw.substring(2, 4)}-${fechaVencRaw.substring(4, 6)}`;
+        }
+
+        let nacionalidad = null;
+        if (nacRaw === 'ARG') nacionalidad = 'ARGENTINA';
+        else if (nacRaw === 'CHL') nacionalidad = 'CHILENA';
+        else if (nacRaw === 'URY') nacionalidad = 'URUGUAYA';
+        else if (nacRaw === 'PRY') nacionalidad = 'PARAGUAYA';
+        else if (nacRaw === 'PER') nacionalidad = 'PERUANA';
+        else if (nacRaw === 'BOL') nacionalidad = 'BOLIVIANA';
+        else if (nacRaw === 'COL') nacionalidad = 'COLOMBIANA';
+        else if (nacRaw === 'ECU') nacionalidad = 'ECUATORIANA';
+        else if (nacRaw === 'VEN') nacionalidad = 'VENEZOLANA';
+        else if (nacRaw === 'BRA') nacionalidad = 'BRASILEÑA';
+        else if (nacRaw.length > 0) nacionalidad = nacRaw;
+
+        return { fechaVencimiento: vencimiento, nacionalidad: nacionalidad };
       }
-
-      let nacionalidad = null;
-      if (nacRaw === 'ARG') nacionalidad = 'ARGENTINA';
-      else if (nacRaw === 'CHL') nacionalidad = 'CHILENA';
-      else if (nacRaw === 'URY') nacionalidad = 'URUGUAYA';
-      else if (nacRaw === 'PRY') nacionalidad = 'PARAGUAYA';
-      else if (nacRaw === 'PER') nacionalidad = 'PERUANA';
-      else if (nacRaw === 'BOL') nacionalidad = 'BOLIVIANA';
-      else if (nacRaw === 'COL') nacionalidad = 'COLOMBIANA';
-      else if (nacRaw === 'ECU') nacionalidad = 'ECUATORIANA';
-      else if (nacRaw === 'VEN') nacionalidad = 'VENEZOLANA';
-      else if (nacRaw === 'BRA') nacionalidad = 'BRASILEÑA';
-      else if (nacRaw.length > 0) nacionalidad = nacRaw;
-
-      return { fechaVencimiento: vencimiento, nacionalidad: nacionalidad };
     }
     return { fechaVencimiento: null, nacionalidad: null };
   }
@@ -219,4 +202,4 @@ const DomicilioOCR = (() => {
   };
 })();
 
-console.log('✅ domicilio-ocr.js optimizado para leer MRZ y texto');
+console.log('✅ domicilio-ocr.js optimizado (Lectura completa)');
