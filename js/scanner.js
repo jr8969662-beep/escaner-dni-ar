@@ -45,9 +45,28 @@ const DNIScanner = (() => {
     return muestras > 0 ? suma / muestras : 0;
   }
 
+  // Rotar imagen para escaneos multi-ángulo
+  function rotarCanvas(origen, grados) {
+    const c = document.createElement('canvas');
+    const ctx = c.getContext('2d');
+    if (grados === 90 || grados === 270) {
+      c.width = origen.height;
+      c.height = origen.width;
+    } else {
+      c.width = origen.width;
+      c.height = origen.height;
+    }
+    ctx.translate(c.width / 2, c.height / 2);
+    ctx.rotate(grados * Math.PI / 180);
+    ctx.drawImage(origen, -origen.width / 2, -origen.height / 2);
+    return c;
+  }
+
   async function escanearFrame(canvas, usarROI = true) {
     const canvasEscaneo = usarROI ? extraerROI(canvas) : canvas;
     const ctx = canvasEscaneo.getContext('2d', { willReadFrequently: true });
+
+    // 1. Intento normal
     if (barcodeDetector) {
       try {
         const codigos = await barcodeDetector.detect(canvasEscaneo);
@@ -67,17 +86,27 @@ const DNIScanner = (() => {
         if (qr && qr.data) return qr.data;
       } catch (e) {}
     }
+
+    // 2. Si falla, intentar rotado 90 grados (por si escanean de costado)
+    const rotado = rotarCanvas(canvasEscaneo, 90);
+    if (zxingReader) {
+      try {
+        const resultado = await zxingReader.decodeFromCanvas(rotado);
+        if (resultado && resultado.getText) return resultado.getText();
+      } catch (e) {}
+    }
+
     return null;
   }
 
-  function escanearContinuo(video, canvas, onDetected, onTimeout, opciones = {}) {
+  function escanearContinuo(video, canvas, onDetected, onTimeout, onFocusLock, opciones = {}) {
     const intervaloMs = opciones.intervaloMs || 300;
     const timeoutMs = opciones.timeoutMs || 20000;
-    // 🔥 FORZAMOS ANCHO MAX A 1280 PARA EVITAR LAG
     const anchoMax = opciones.anchoMax || 1280;
     const usarROI = opciones.usarROI !== false;
     const onBrillo = opciones.onBrillo;
     const framesConfirmacion = opciones.framesConfirmacion || 2;
+    
     let activo = true, intentos = 0, ultimoTextoDetectado = null, framesConfirmados = 0;
 
     const timer = setTimeout(() => { if (activo) { activo = false; if (onTimeout) onTimeout(); } }, timeoutMs);
@@ -91,17 +120,28 @@ const DNIScanner = (() => {
           canvas.height = Math.round(video.videoHeight * escala);
           const ctx = canvas.getContext('2d', { willReadFrequently: true });
           ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          
           if (intentos % 3 === 0 && onBrillo) {
             try { onBrillo(medirBrillo(canvas)); } catch (e) {}
           }
+
           const texto = await escanearFrame(canvas, usarROI);
+
           if (texto && activo) {
-            if (texto === ultimoTextoDetectado) framesConfirmados++;
-            else { ultimoTextoDetectado = texto; framesConfirmados = 1; }
+            if (texto === ultimoTextoDetectado) {
+              framesConfirmados++;
+            } else {
+              ultimoTextoDetectado = texto;
+              framesConfirmados = 1;
+              // Bloquear el foco para que la foto salga nítida
+              if (onFocusLock) onFocusLock();
+            }
             if (framesConfirmados >= framesConfirmacion) {
               activo = false; clearTimeout(timer); onDetected(texto); return;
             }
-          } else { ultimoTextoDetectado = null; framesConfirmados = 0; }
+          } else {
+            ultimoTextoDetectado = null; framesConfirmados = 0;
+          }
           intentos++;
         }
       } catch (e) {}
@@ -112,23 +152,28 @@ const DNIScanner = (() => {
   }
 
   async function escanearImagen(imgElement) {
-    const maxAncho = 1280, escala = Math.min(1, maxAncho / imgElement.width);
+    const maxAncho = 1920, escala = Math.min(1, maxAncho / imgElement.width);
     const canvas = document.createElement('canvas');
     canvas.width = Math.round(imgElement.width * escala);
     canvas.height = Math.round(imgElement.height * escala);
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
     ctx.drawImage(imgElement, 0, 0, canvas.width, canvas.height);
+    
     let texto = await escanearFrame(canvas, true);
     if (texto) return texto;
-    texto = await escanearFrame(canvas, false);
-    if (texto) return texto;
+    
     const c2 = document.createElement('canvas');
     c2.width = canvas.width * 2; c2.height = canvas.height * 2;
     const ctx2 = c2.getContext('2d', { willReadFrequently: true });
     ctx2.imageSmoothingEnabled = false;
     ctx2.drawImage(canvas, 0, 0, c2.width, c2.height);
-    return await escanearFrame(c2, false);
+    
+    texto = await escanearFrame(c2, false);
+    if (texto) return texto;
+
+    // Probar rotado 90 grados
+    return await escanearFrame(rotarCanvas(c2, 90), false);
   }
 
-  return { escanearContinuo, escanearImagen, medirBrillo, barcodeDisponible: !!barcodeDetector, zxingDisponible: !!zxingReader, jsQRDisponible };
+  return { escanearContinuo, escanearImagen, medirBrillo };
 })();
