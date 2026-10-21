@@ -4,49 +4,34 @@ const DomicilioOCR = (() => {
   let DEBUG = false;
   const log = (...args) => { if (DEBUG) console.log(...args); };
 
-  // 🔥 SUBIMOS LA RESOLUCIÓN AL MÁXIMO (Mínimo 2600px de ancho)
-  const ANCHO_MIN = 2600; 
-  const FRACCIONES_MRZ = [0.35, 0.5];
+  const ANCHO_MIN = 1500; 
 
   const PARAMS_TEXTO = {
     tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZÁÉÍÓÚÑabcdefghijklmnopqrstuvwxyzáéíóúñ0123456789 .,-°ºª/()<>:',
     preserve_interword_spaces: '1',
-    tessedit_pageseg_mode: '6',
-    tessedit_ocr_engine_mode: '1' // Usar solo LSTM (el motor de IA más preciso)
+    tessedit_pageseg_mode: '6'
   };
 
   const PARAMS_MRZ = {
     tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<',
     preserve_interword_spaces: '0',
-    tessedit_pageseg_mode: '6',
-    tessedit_ocr_engine_mode: '1'
+    tessedit_pageseg_mode: '6'
   };
 
   let workerPromise = null;
   let progresoCb = null;
-  let etapaDesde = 0;
-  let etapaHasta = 1;
-
-  function etapa(desde, hasta) { etapaDesde = desde; etapaHasta = hasta; }
 
   function initWorker() {
     if (!workerPromise) {
       workerPromise = Tesseract.createWorker('spa', 1, {
         logger: (m) => {
           if (progresoCb && m.status === 'recognizing text') {
-            progresoCb(etapaDesde + m.progress * (etapaHasta - etapaDesde));
+            progresoCb(m.progress);
           }
         }
       }).catch((e) => { workerPromise = null; throw e; });
     }
     return workerPromise;
-  }
-
-  async function liberar() {
-    if (!workerPromise) return;
-    const p = workerPromise;
-    workerPromise = null;
-    try { const w = await p; await w.terminate(); } catch (e) {}
   }
 
   function aElemento(fuente) {
@@ -59,11 +44,10 @@ const DomicilioOCR = (() => {
     });
   }
 
-  // Preparar imagen con escala masiva
   function preprocesar(el) {
     const w0 = el.videoWidth || el.naturalWidth || el.width;
     const h0 = el.videoHeight || el.naturalHeight || el.height;
-    const escala = w0 < ANCHO_MIN ? Math.min(ANCHO_MIN / w0, 4) : 1; // Escalar hasta 4x
+    const escala = w0 < ANCHO_MIN ? Math.min(ANCHO_MIN / w0, 2.5) : 1; 
     const w = Math.round(w0 * escala);
     const h = Math.round(h0 * escala);
 
@@ -78,23 +62,10 @@ const DomicilioOCR = (() => {
     const imgData = ctx.getImageData(0, 0, w, h);
     const d = imgData.data;
 
-    const hist = new Uint32Array(256);
     for (let i = 0; i < d.length; i += 4) {
-      const g = (0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]) | 0;
-      d[i] = g;
-      hist[g]++;
-    }
-
-    const total = w * h;
-    let acc = 0, lo = 0, hi = 255;
-    for (let g = 0; g < 256; g++) { acc += hist[g]; if (acc >= total * 0.01) { lo = g; break; } }
-    acc = 0;
-    for (let g = 255; g >= 0; g--) { acc += hist[g]; if (acc >= total * 0.01) { hi = g; break; } }
-    if (hi - lo < 30) { lo = 0; hi = 255; }
-    const k = 255 / (hi - lo);
-
-    for (let i = 0; i < d.length; i += 4) {
-      const v = Math.max(0, Math.min(255, (d[i] - lo) * k));
+      const gris = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+      let v = (gris - 128) * 1.4 + 128;
+      v = Math.max(0, Math.min(255, v));
       d[i] = d[i + 1] = d[i + 2] = v;
     }
     ctx.putImageData(imgData, 0, 0);
@@ -110,221 +81,117 @@ const DomicilioOCR = (() => {
     return r;
   }
 
-  const CLASES = {
-    A: '[A4ÁÀ]', E: '[E3ÉÈ]', I: '[I1LÍÌ]', L: '[L1I]', O: '[O0ÓÒ]',
-    U: '[UÚÜ]', S: '[S5]', B: '[B8]', G: '[G6]', Z: '[Z2]'
-  };
-  const tol = (palabras) =>
-    palabras.split(' ').map(p => [...p].map(ch => CLASES[ch] || ch).join('')).join('\\s*');
-  const unir = (lista) => lista.map(x => tol(x)).join('|');
-
-  const L_DOMICILIO = tol('DOMICILIO');
-  const L_LUGAR_NAC = tol('LUGAR DE NACIMIENTO');
-  const L_CUIL = tol('CUIL');
-
-  const STOPS_DOMICILIO = unir(['LUGAR', 'NACIMIENTO', 'TRAMITE', 'EJEMPLAR', 'CUIL', 'FECHA', 'NACIONALIDAD', 'IDARG']);
-  const STOPS_LUGAR = unir(['DOMICILIO', 'TRAMITE', 'EJEMPLAR', 'CUIL', 'FECHA', 'NACIONALIDAD', 'IDARG']);
-
-  function normalizar(texto) {
-    return (texto || '')
-      .toUpperCase()
-      .replace(/[|_=~`]+/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
-  }
-
-  // 🔥 DICCIONARIO DE CORRECCIÓN ORTOGRÁFICA
-  function corregirTextoDomicilio(v) {
-    let txt = v;
-    
-    // Provincias Argentinas (para evitar errores de tipeo del OCR)
-    const provincias = ['SALTA', 'BUENOS AIRES', 'CÓRDOBA', 'SANTA FE', 'MENDOZA', 'TUCUMÁN', 'ENTRE RÍOS', 'CHACO', 'CORRIENTES', 'MISIONES', 'SANTIAGO DEL ESTERO', 'SAN JUAN', 'JUJUY', 'RÍO NEGRO', 'NEUQUÉN', 'FORMOSA', 'CHUBUT', 'SAN LUIS', 'CATAMARCA', 'LA RIOJA', 'LA PAMPA', 'SANTA CRUZ', 'TIERRA DEL FUEGO'];
-    provincias.forEach(p => {
-      // Si lee "5ALTA" o "S4LTA", lo corrige a "SALTA"
-      const regexProv = new RegExp(p.replace('A', '[A4]').replace('E', '[E3]').replace('I', '[I1]').replace('O', '[O0]').replace('S', '[S5]'), 'g');
-      txt = txt.replace(regexProv, p);
-    });
-
-    // Correcciones típicas del DNI
-    return txt
-      .replace(/\bPABLM\b/gi, 'PABLO')
-      .replace(/\bPABL0\b/gi, 'PABLO')
-      .replace(/\bNORT\b/gi, 'NORTE')
-      .replace(/\bCAJ\b/gi, 'CAPITAL')
-      .replace(/\bCAPITA1\b/gi, 'CAPITAL')
-      .replace(/\bLOT\b/gi, 'LOTE')
-      .replace(/\bMZA\b/gi, 'MANZANA')
-      .replace(/\bMZ\b/gi, 'MANZANA')
-      .replace(/\bB\s*([°º])\s*/gi, 'BARRIO ')
-      .replace(/\bDEPT0\b/gi, 'DEPTO')
-      .replace(/\bP1S0\b/gi, 'PISO')
-      .replace(/\s*-\s*/g, ' - ')
-      .replace(/--+/g, '-')
-      .replace(/\s+/g, ' ')
-      .trim();
-  }
-
-  function limpiarValor(v) {
-    return v
-      .replace(/^(?:ADDRESS|PLACE OF BIRTH)\b[\s:./-]*/i, '')
-      .replace(/\s+/g, ' ')
-      .replace(/^[\s:./-]+|[\s:.,/-]+$/g, '')
-      .trim();
-  }
-
-  function valorValido(v) {
-    if (!v || v.length < 4 || v.length > 150 || v.includes('<')) return false;
-    return (v.match(/[A-ZÁÉÍÓÚÑ0-9]/gi) || []).length >= 3;
-  }
-
-  function titulo(s) {
-    return s.toLowerCase()
-      .replace(/(^|\s)(\S)/g, (_, a, b) => a + b.toUpperCase())
-      .replace(/\bS\/n\b/g, 'S/N')
-      .replace(/\bIi\b/g, 'II')
-      .replace(/\bIii\b/g, 'III');
-  }
-
-  function extraerCampo(texto, etiqueta, stops) {
-    const t = normalizar(texto);
-    const re = new RegExp(`${etiqueta}[:\\s.,/\\-]*(.*?)(?=\\s(?:${stops})|<|$)`, 'i');
-    const m = re.exec(t);
-    if (!m) return null;
-    
-    let v = limpiarValor(m[1]);
-    v = corregirTextoDomicilio(v);
-    
-    return valorValido(v) ? titulo(v) : null;
-  }
-
+  // 🔥 PARSER A PRUEBA DE BALAS
   function extraerDomicilio(texto) {
-    return extraerCampo(texto, L_DOMICILIO, STOPS_DOMICILIO);
+    if (!texto) return null;
+    // Junta todo en una sola línea
+    let limpio = texto.toUpperCase().replace(/\s+/g, ' ').trim();
+    
+    // Busca "DOMICILIO" tolerando errores de OCR (0 en vez de O)
+    const idx = limpio.search(/D[O0]M[I1L]C[I1L][I1L][O0]/i);
+    
+    if (idx !== -1) {
+      // Toma todo el texto que sigue después de "DOMICILIO" (9 letras)
+      let resto = limpio.substring(idx + 9); 
+      resto = resto.replace(/^[^A-Z0-9]+/, ''); // Limpia los ":" o espacios iniciales
+      
+      // Corta el texto cuando encuentra "LUGAR" o "CUIL"
+      const fin = resto.search(/(LUGAR|NACIMIENTO|CUIL|TRAMITE|EJEMPLAR|IDARG)/i);
+      if (fin !== -1) {
+        resto = resto.substring(0, fin);
+      }
+      
+      let dom = resto.trim().replace(/[\s:.,/-]+$/, '');
+      if (dom.length > 5) {
+        // Corrige errores típicos
+        dom = dom.replace(/PABLM/gi, 'PABLO')
+                 .replace(/NORT/gi, 'NORTE')
+                 .replace(/CAJ/gi, 'CAPITAL')
+                 .replace(/\s*-\s*/g, ' - ');
+        return dom.toLowerCase().replace(/(?:^|\s)\S/g, c => c.toUpperCase());
+      }
+    }
+    return null;
   }
 
   function extraerLugarNacimiento(texto) {
-    let res = extraerCampo(texto, L_LUGAR_NAC, STOPS_LUGAR);
-    if (!res) res = extraerCampo(texto, tol('NACIMIENTO'), STOPS_LUGAR);
-    return res;
-  }
-
-  const PREFIJOS_CUIL = ['20', '23', '24', '27', '30', '33', '34'];
-  const PESOS_CUIL = [5, 4, 3, 2, 7, 6, 5, 4, 3, 2];
-
-  function cuilValido(c) {
-    const d = String(c).replace(/\D/g, '');
-    if (d.length !== 11 || !PREFIJOS_CUIL.includes(d.slice(0, 2))) return false;
-    const suma = PESOS_CUIL.reduce((a, p, i) => a + p * Number(d[i]), 0);
-    let v = 11 - (suma % 11);
-    if (v === 11) v = 0;
-    return v === Number(d[10]);
-  }
-
-  const A_DIGITO_CUIL = { O: '0', Q: '0', D: '0', I: '1', L: '1', '|': '1', Z: '2', S: '5', B: '8', G: '6' };
-
-  function extraerCUIL(texto, contexto = {}) {
     if (!texto) return null;
-    const dni = String(contexto.dni || '').replace(/\D/g, '');
-    const dniPad = dni ? dni.padStart(8, '0') : '';
-    const t = texto.toUpperCase();
-
-    const buscar = (segmento, exigirDni) => {
-      for (const m of segmento.matchAll(/\b(\d{2})[-\s.]?(\d{8})[-\s.]?(\d)\b/g)) {
-        const c = `${m[1]}-${m[2]}-${m[3]}`;
-        if (!cuilValido(c)) continue;
-        if (exigirDni && dniPad && m[2] !== dniPad) continue;
-        return c;
+    let limpio = texto.toUpperCase().replace(/\s+/g, ' ').trim();
+    
+    let idx = limpio.search(/(LUGAR\s*DE\s*NACIMIENTO|NACIDO\s*EN)/i);
+    if (idx === -1) idx = limpio.search(/NACIMIENTO/i);
+    
+    if (idx !== -1) {
+      // Busca la palabra exacta para cortar
+      const match = limpio.substring(idx).match(/^(LUGAR\s*DE\s*NACIMIENTO|NACIDO\s*EN|NACIMIENTO)/i);
+      if (match) {
+        let resto = limpio.substring(idx + match[0].length);
+        resto = resto.replace(/^[^A-Z0-9]+/, '');
+        
+        const fin = resto.search(/(DOMICILIO|CUIL|TRAMITE|EJEMPLAR|IDARG)/i);
+        if (fin !== -1) {
+          resto = resto.substring(0, fin);
+        }
+        
+        let lugar = resto.trim().replace(/[\s:.,/-]+$/, '');
+        if (lugar.length > 3) {
+          return lugar.toLowerCase().replace(/(?:^|\s)\S/g, c => c.toUpperCase());
+        }
       }
-      return null;
-    };
-
-    const i = t.search(new RegExp(L_CUIL, 'i'));
-    const cercano = i >= 0 ? t.slice(i, i + 40).replace(/[OQDIL|ZSBG]/g, ch => A_DIGITO_CUIL[ch] || ch) : '';
-
-    return (cercano && buscar(cercano, true)) || buscar(t, true) || (cercano && buscar(cercano, false)) || null;
-  }
-
-  const NACIONALIDADES = {
-    ARG: 'ARGENTINA', CHL: 'CHILENA', URY: 'URUGUAYA', PRY: 'PARAGUAYA',
-    PER: 'PERUANA', BOL: 'BOLIVIANA', COL: 'COLOMBIANA', ECU: 'ECUATORIANA',
-    VEN: 'VENEZOLANA', BRA: 'BRASILEÑA'
-  };
-
-  const A_DIGITO = { O: '0', Q: '0', D: '0', I: '1', L: '1', Z: '2', S: '5', B: '8', G: '6' };
-  const A_LETRA = { 0: 'O', 1: 'I', 2: 'Z', 4: 'A', 5: 'S', 8: 'B', 6: 'G' };
-  const RE_MRZ = /(\d{6})([0-9<])([MF<])(\d{2})(\d{2})(\d{2})([0-9<])([A-Z]{3})/;
-
-  function digitoControl(s) {
-    const pesos = [7, 3, 1];
-    let suma = 0;
-    for (let i = 0; i < s.length; i++) {
-      const ch = s[i];
-      const v = ch === '<' ? 0 : /\d/.test(ch) ? Number(ch) : ch.charCodeAt(0) - 55;
-      suma += v * pesos[i % 3];
     }
-    return suma % 10;
+    return null;
   }
 
-  function repararLinea2(l) {
-    if (l.length < 28 || l.length > 32) return null;
-    const a = [...l];
-    for (let i = 0; i <= 14; i++) if (i !== 7) a[i] = A_DIGITO[a[i]] || a[i];
-    for (let i = 15; i <= 17; i++) a[i] = A_LETRA[a[i]] || a[i];
-    return a.join('');
-  }
-
-  function leerLineaMRZ(l) {
-    const m = RE_MRZ.exec(l);
-    if (!m) return null;
-    const [, nacim, dcNacim, , yy, mm, dd, dcVenc, pais] = m;
-    if (+mm < 1 || +mm > 12 || +dd < 1 || +dd > 31) return null;
-    return {
-      fechaVencimiento: `20${yy}-${mm}-${dd}`,
-      nacionalidad: NACIONALIDADES[pais] || pais,
-      mrzVerificada: String(digitoControl(nacim)) === dcNacim && String(digitoControl(yy + mm + dd)) === dcVenc
-    };
+  function extraerCUIL(texto) {
+    if (!texto) return null;
+    const m = texto.match(/\b(\d{2})[-\s.]?(\d{8})[-\s.]?(\d)\b/);
+    if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+    return null;
   }
 
   function extraerDesdeMRZ(texto) {
-    const vacio = { fechaVencimiento: null, nacionalidad: null, mrzVerificada: null };
-    if (!texto) return vacio;
-
+    if (!texto) return { fechaVencimiento: null, nacionalidad: null };
     const lineas = texto.toUpperCase().split(/[\r\n]+/).map(l => l.replace(/[^A-Z0-9<]/g, '')).filter(l => l.length >= 20);
-    const hallazgos = [];
-    for (const l of lineas) {
-      for (const cand of [l, repararLinea2(l)]) {
-        const h = cand && leerLineaMRZ(cand);
-        if (h) hallazgos.push(h);
+    const mrzLine = lineas.find(l => /\d{6}[0-9<][MF]\d{6}[0-9<][A-Z]{3}/.test(l));
+
+    if (mrzLine) {
+      const idx = mrzLine.search(/[MF]/);
+      if (idx !== -1) {
+        const fechaVencRaw = mrzLine.substring(idx + 1, idx + 7);
+        const nacRaw = mrzLine.substring(idx + 8, idx + 11);
+
+        let vencimiento = null;
+        if (/^\d{6}$/.test(fechaVencRaw)) {
+          const yy = parseInt(fechaVencRaw.substring(0, 2));
+          const yyyy = yy > 30 ? 1900 + yy : 2000 + yy;
+          vencimiento = `${yyyy}-${fechaVencRaw.substring(2, 4)}-${fechaVencRaw.substring(4, 6)}`;
+        }
+
+        let nacionalidad = null;
+        const paises = { ARG: 'ARGENTINA', CHL: 'CHILENA', URY: 'URUGUAYA', PRY: 'PARAGUAYA', PER: 'PERUANA', BOL: 'BOLIVIANA', COL: 'COLOMBIANA', ECU: 'ECUATORIANA', VEN: 'VENEZOLANA', BRA: 'BRASILEÑA' };
+        if (paises[nacRaw]) nacionalidad = paises[nacRaw];
+
+        return { fechaVencimiento: vencimiento, nacionalidad: nacionalidad };
       }
     }
-    return hallazgos.find(h => h.mrzVerificada) || hallazgos[0] || vacio;
+    return { fechaVencimiento: null, nacionalidad: null };
   }
 
   async function leer(fuente, pais = 'arg', onProgress, contexto = {}) {
-    void pais;
     progresoCb = typeof onProgress === 'function' ? onProgress : null;
-
     const w = await initWorker();
     const origen = await aElemento(fuente);
     const gris = preprocesar(origen);
 
-    etapa(0, 0.6);
     await w.setParameters(PARAMS_TEXTO);
     const { data: { text } } = await w.recognize(gris);
     log('📄 OCR crudo del reverso:\n' + text);
 
-    let mrz = extraerDesdeMRZ(text);
-    if (!mrz.mrzVerificada) {
-      await w.setParameters(PARAMS_MRZ);
-      for (let i = 0; i < FRACCIONES_MRZ.length; i++) {
-        etapa(0.6 + i * 0.2, 0.8 + i * 0.2);
-        const { data: { text: textoMRZ } } = await w.recognize(recortarInferior(gris, FRACCIONES_MRZ[i]));
-        log(`📄 OCR MRZ (${FRACCIONES_MRZ[i] * 100}% inferior):\n` + textoMRZ);
-        const cand = extraerDesdeMRZ(textoMRZ);
-        if (cand.mrzVerificada || (!mrz.fechaVencimiento && cand.fechaVencimiento)) mrz = cand;
-        if (mrz.mrzVerificada) break;
-      }
-      await w.setParameters(PARAMS_TEXTO);
-    }
+    let mrz = { fechaVencimiento: null, nacionalidad: null };
+    await w.setParameters(PARAMS_MRZ);
+    const { data: { text: textoMRZ } } = await w.recognize(recortarInferior(gris, 0.4));
+    const mrzData = extraerDesdeMRZ(textoMRZ || text);
+    if (mrzData.fechaVencimiento) mrz = mrzData;
 
     if (progresoCb) progresoCb(1);
 
@@ -332,21 +199,11 @@ const DomicilioOCR = (() => {
       raw: text,
       domicilio: extraerDomicilio(text),
       lugarNacimiento: extraerLugarNacimiento(text),
-      cuil: extraerCUIL(text, contexto),
+      cuil: extraerCUIL(text),
       fechaVencimiento: mrz.fechaVencimiento,
-      nacionalidad: mrz.nacionalidad,
-      mrzVerificada: mrz.mrzVerificada
+      nacionalidad: mrz.nacionalidad
     };
   }
 
-  return {
-    leer,
-    liberar,
-    setDebug: (v) => { DEBUG = !!v; },
-    extraerDomicilio,
-    extraerLugarNacimiento,
-    extraerCUIL,
-    extraerDesdeMRZ,
-    cuilValido
-  };
+  return { leer, liberar: async () => { if (workerPromise) { const w = await workerPromise; w.terminate(); workerPromise = null; } }, setDebug: (v) => { DEBUG = !!v; } };
 })();
