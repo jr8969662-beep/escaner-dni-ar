@@ -1,15 +1,5 @@
 /**
  * OCR del reverso del DNI argentino (Tesseract.js v5)
- *
- * - Texto (domicilio, lugar de nacimiento, CUIL): pasada 1 sobre la imagen completa.
- * - MRZ (vencimiento, nacionalidad): pasada 2 sobre el borde inferior, solo A-Z 0-9 <
- *   (se hace únicamente si la pasada 1 no encontró una MRZ verificada).
- *
- * Uso:
- *   const r = await DomicilioOCR.leer(canvasOImagen, 'arg', (p) => { ... }, { dni: '12345678' });
- *   // r = { raw, domicilio, lugarNacimiento, cuil, fechaVencimiento, nacionalidad, mrzVerificada }
- *
- * Para ver el texto crudo que lee el OCR: DomicilioOCR.setDebug(true)
  */
 
 const DomicilioOCR = (() => {
@@ -18,11 +8,8 @@ const DomicilioOCR = (() => {
   let DEBUG = false;
   const log = (...args) => { if (DEBUG) console.log(...args); };
 
-  // ============================================
-  // CONFIGURACIÓN
-  // ============================================
-  const ANCHO_MIN = 1800;              // si la imagen es más angosta, se agranda hasta este ancho
-  const FRACCIONES_MRZ = [0.35, 0.5];  // porción inferior que se recorta para buscar la MRZ
+  const ANCHO_MIN = 1500;
+  const FRACCIONES_MRZ = [0.4];
 
   const PARAMS_TEXTO = {
     tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZÁÉÍÓÚÑabcdefghijklmnopqrstuvwxyzáéíóúñ0123456789 .,-°ºª/()<>:',
@@ -36,16 +23,12 @@ const DomicilioOCR = (() => {
     tessedit_pageseg_mode: '6'
   };
 
-  // Zona superior (domicilio / lugar): sin whitelist, para no filtrar caracteres reales (° , ( ) etc.)
   const PARAMS_ZONA = {
     tessedit_char_whitelist: '',
     preserve_interword_spaces: '1',
     tessedit_pageseg_mode: '6'
   };
 
-  // ============================================
-  // WORKER (una sola instancia, progreso por etapas)
-  // ============================================
   let workerPromise = null;
   let progresoCb = null;
   let etapaDesde = 0;
@@ -66,16 +49,18 @@ const DomicilioOCR = (() => {
     return workerPromise;
   }
 
+  async function precargar() {
+    const w = await initWorker();
+    await w.setParameters(PARAMS_TEXTO);
+  }
+
   async function liberar() {
     if (!workerPromise) return;
     const p = workerPromise;
     workerPromise = null;
-    try { const w = await p; await w.terminate(); } catch (e) { /* nada */ }
+    try { const w = await p; await w.terminate(); } catch (e) { }
   }
 
-  // ============================================
-  // IMAGEN: agrandar, gris y estirar contraste
-  // ============================================
   function aElemento(fuente) {
     if (typeof fuente !== 'string') return Promise.resolve(fuente);
     return new Promise((resolve, reject) => {
@@ -104,7 +89,6 @@ const DomicilioOCR = (() => {
     const imgData = ctx.getImageData(0, 0, w, h);
     const d = imgData.data;
 
-    // Escala de grises + histograma
     const hist = new Uint32Array(256);
     for (let i = 0; i < d.length; i += 4) {
       const g = (0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]) | 0;
@@ -112,13 +96,12 @@ const DomicilioOCR = (() => {
       hist[g]++;
     }
 
-    // Estirar contraste entre los percentiles 1 % y 99 % (se adapta a la luz de cada foto)
     const total = w * h;
     let acc = 0, lo = 0, hi = 255;
     for (let g = 0; g < 256; g++) { acc += hist[g]; if (acc >= total * 0.01) { lo = g; break; } }
     acc = 0;
     for (let g = 255; g >= 0; g--) { acc += hist[g]; if (acc >= total * 0.01) { hi = g; break; } }
-    if (hi - lo < 30) { lo = 0; hi = 255; } // imagen casi plana: no estirar
+    if (hi - lo < 30) { lo = 0; hi = 255; }
     const k = 255 / (hi - lo);
 
     for (let i = 0; i < d.length; i += 4) {
@@ -147,8 +130,6 @@ const DomicilioOCR = (() => {
     return r;
   }
 
-  // Umbral local (media en ventana, con imagen integral): separa tinta fina y clara
-  // de un fondo con dibujos. gris = Uint8ClampedArray de 1 canal; devuelve 0/255.
   function umbralLocal(gris, w, h, radio, k) {
     const ancho = w + 1;
     const integral = new Float64Array(ancho * (h + 1));
@@ -185,10 +166,6 @@ const DomicilioOCR = (() => {
     return c;
   }
 
-  // ============================================
-  // TEXTO: etiquetas tolerantes a errores de OCR
-  // ============================================
-  // Cada letra acepta sus confusiones típicas (O/0, I/1/L, A/4, E/3, S/5, B/8, G/6, Z/2) y acentos.
   const CLASES = {
     A: '[A4ÁÀ]', E: '[E3ÉÈ]', I: '[I1LÍÌ]', L: '[L1I]', O: '[O0ÓÒ]',
     U: '[UÚÜ]', S: '[S5]', B: '[B8]', G: '[G6]', Z: '[Z2]'
@@ -201,7 +178,6 @@ const DomicilioOCR = (() => {
   const L_LUGAR_NAC = tol('LUGAR DE NACIMIENTO');
   const L_CUIL = tol('CUIL');
 
-  // Palabras donde corta cada campo (la siguiente etiqueta o el inicio de la MRZ)
   const STOPS_DOMICILIO = unir(['LUGAR', 'NACIMIENTO', 'TRAMITE', 'EJEMPLAR', 'CUIL', 'FECHA', 'NACIONALIDAD', 'IDARG']);
   const STOPS_LUGAR = unir(['DOMICILIO', 'TRAMITE', 'EJEMPLAR', 'CUIL', 'FECHA', 'NACIONALIDAD', 'IDARG']);
 
@@ -209,13 +185,13 @@ const DomicilioOCR = (() => {
     return (texto || '')
       .toUpperCase()
       .replace(/[|_=~`]+/g, ' ')
-      .replace(/\s+/g, ' ')   // colapsa saltos de línea: así el valor puede ocupar varias líneas
+      .replace(/\s+/g, ' ')
       .trim();
   }
 
   function limpiarValor(v) {
     return v
-      .replace(/^(?:ADDRESS|PLACE OF BIRTH)\b[\s:./-]*/i, '') // etiqueta bilingüe
+      .replace(/^(?:ADDRESS|PLACE OF BIRTH)\b[\s:./-]*/i, '')
       .replace(/\s+/g, ' ')
       .replace(/^[\s:./-]+|[\s:.,/-]+$/g, '')
       .trim();
@@ -230,7 +206,7 @@ const DomicilioOCR = (() => {
     return s.toLowerCase()
       .replace(/(^|[\s(])([^\s(])/g, (_, a, b) => a + b.toUpperCase())
       .replace(/\bS\/n\b/g, 'S/N')
-      .replace(/\b(Ii|Iii|Iv|Vi|Vii|Viii|Ix|Xi|Xii|Xiii)\b/g, (m) => m.toUpperCase()); // números romanos
+      .replace(/\b(Ii|Iii|Iv|Vi|Vii|Viii|Ix|Xi|Xii|Xiii)\b/g, (m) => m.toUpperCase());
   }
 
   function extraerCampo(texto, etiqueta, stops) {
@@ -250,9 +226,6 @@ const DomicilioOCR = (() => {
     return extraerCampo(texto, L_LUGAR_NAC, STOPS_LUGAR);
   }
 
-  // ============================================
-  // CUIL: se valida prefijo + dígito verificador (y se cruza con el DNI si lo tenemos)
-  // ============================================
   const PREFIJOS_CUIL = ['20', '23', '24', '27', '30', '33', '34'];
   const PESOS_CUIL = [5, 4, 3, 2, 7, 6, 5, 4, 3, 2];
 
@@ -262,7 +235,7 @@ const DomicilioOCR = (() => {
     const suma = PESOS_CUIL.reduce((a, p, i) => a + p * Number(d[i]), 0);
     let v = 11 - (suma % 11);
     if (v === 11) v = 0;
-    return v === Number(d[10]); // v === 10 nunca coincide: ese caso lo resuelve el prefijo 23
+    return v === Number(d[10]);
   }
 
   const A_DIGITO_CUIL = { O: '0', Q: '0', D: '0', I: '1', L: '1', '|': '1', Z: '2', S: '5', B: '8', G: '6' };
@@ -283,8 +256,6 @@ const DomicilioOCR = (() => {
       return null;
     };
 
-    // Segmento justo después de la etiqueta "CUIL", con letras confundidas pasadas a dígitos
-    // (el dígito verificador protege de falsos positivos)
     const i = t.search(new RegExp(L_CUIL, 'i'));
     const cercano = i >= 0
       ? t.slice(i, i + 40).replace(/[OQDIL|ZSBG]/g, ch => A_DIGITO_CUIL[ch] || ch)
@@ -296,10 +267,6 @@ const DomicilioOCR = (() => {
       || null;
   }
 
-  // ============================================
-  // MRZ (formato TD1, 3 líneas de 30): vencimiento y nacionalidad de la línea 2
-  // Línea 2: nacimiento(6) ctrl(1) sexo(1) vencimiento(6) ctrl(1) nacionalidad(3) ...
-  // ============================================
   const NACIONALIDADES = {
     ARG: 'ARGENTINA', CHL: 'CHILENA', URY: 'URUGUAYA', PRY: 'PARAGUAYA',
     PER: 'PERUANA', BOL: 'BOLIVIANA', COL: 'COLOMBIANA', ECU: 'ECUATORIANA',
@@ -310,7 +277,6 @@ const DomicilioOCR = (() => {
   const A_LETRA = { 0: 'O', 1: 'I', 2: 'Z', 4: 'A', 5: 'S', 8: 'B', 6: 'G' };
   const RE_MRZ = /(\d{6})([0-9<])([MF<])(\d{2})(\d{2})(\d{2})([0-9<])([A-Z]{3})/;
 
-  // Dígito de control ICAO 9303: pesos 7-3-1, letras A=10..Z=35, '<'=0
   function digitoControl(s) {
     const pesos = [7, 3, 1];
     let suma = 0;
@@ -322,7 +288,6 @@ const DomicilioOCR = (() => {
     return suma % 10;
   }
 
-  // Si la línea tiene el largo de una línea 2, corrige confusiones letra/dígito por posición
   function repararLinea2(l) {
     if (l.length < 28 || l.length > 32) return null;
     const a = [...l];
@@ -337,7 +302,7 @@ const DomicilioOCR = (() => {
     const [, nacim, dcNacim, , yy, mm, dd, dcVenc, pais] = m;
     if (+mm < 1 || +mm > 12 || +dd < 1 || +dd > 31) return null;
     return {
-      fechaVencimiento: `20${yy}-${mm}-${dd}`, // el vencimiento siempre es 20xx
+      fechaVencimiento: `20${yy}-${mm}-${dd}`,
       nacionalidad: NACIONALIDADES[pais] || pais,
       mrzVerificada:
         String(digitoControl(nacim)) === dcNacim &&
@@ -360,28 +325,22 @@ const DomicilioOCR = (() => {
         if (h) hallazgos.push(h);
       }
     }
-    // Preferimos el hallazgo cuyos dígitos de control cierran
     return hallazgos.find(h => h.mrzVerificada) || hallazgos[0] || vacio;
   }
 
-  // ============================================
-  // LECTURA COMPLETA
-  // ============================================
   async function leer(fuente, pais = 'arg', onProgress, contexto = {}) {
-    void pais; // reservado para otros países
+    void pais;
     progresoCb = typeof onProgress === 'function' ? onProgress : null;
 
     const w = await initWorker();
     const origen = await aElemento(fuente);
     const gris = preprocesar(origen);
 
-    // Pasada 1: texto completo
     etapa(0, 0.4);
     await w.setParameters(PARAMS_TEXTO);
     const { data: { text } } = await w.recognize(gris);
     log('📄 OCR crudo del reverso:\n' + text);
 
-    // Pasada 2: MRZ sobre el borde inferior (solo si no hay una MRZ verificada)
     let mrz = extraerDesdeMRZ(text);
     if (!mrz.mrzVerificada) {
       await w.setParameters(PARAMS_MRZ);
@@ -396,13 +355,12 @@ const DomicilioOCR = (() => {
       await w.setParameters(PARAMS_TEXTO);
     }
 
-    // Pasada 3: zona superior (domicilio / lugar de nacimiento) si la letra fina no se leyó
     let domicilio = extraerDomicilio(text);
     let lugar = extraerLugarNacimiento(text);
     let textoZonas = '';
     if (!domicilio || !lugar) {
       await w.setParameters(PARAMS_ZONA);
-      const variantes = [[0.4, true], [0.4, false], [0.6, true]]; // [fracción superior, binarizar]
+      const variantes = [[0.4, true], [0.6, true]];
       for (let i = 0; i < variantes.length && (!domicilio || !lugar); i++) {
         const [fr, bin] = variantes[i];
         etapa(0.7 + i * 0.1, 0.8 + i * 0.1);
@@ -432,6 +390,7 @@ const DomicilioOCR = (() => {
 
   return {
     leer,
+    precargar,
     liberar,
     setDebug: (v) => { DEBUG = !!v; },
     extraerDomicilio,
