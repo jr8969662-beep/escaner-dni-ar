@@ -1,6 +1,14 @@
 (() => {
   'use strict';
 
+  // --- CONFIGURACIÓN DE SUPABASE ---
+  const SUPABASE_URL = 'https://TU_SUPABASE_URL.supabase.co'; // <-- REEMPLAZAR
+  const SUPABASE_KEY = 'TU_SUPABASE_ANON_KEY'; // <-- REEMPLAZAR
+  let supabaseClient = null;
+  if (typeof supabase !== 'undefined') {
+    supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+  }
+
   const DEBUG = false;
   const STORAGE_KEY = 'escaner_dni_historial';
   const MAX_HISTORIAL = 50;
@@ -93,7 +101,7 @@
   let domicilioFlashSoportado = false;
   let domicilioFlashEncendido = false;
   
-  // VARIABLES PARA EL AUTO-ESCANEO DEL REVERSO
+  // Variables para el Auto-Escaneo
   let autoScanActivo = false;
   let autoScanProcesando = false;
 
@@ -520,7 +528,7 @@
         ultimaFotoDataUrl = src;
         
         if (datos && (datos.dni || datos.numero || datos.apellido || datos.nombre)) { render(datos); if (estado) { estado.textContent = '✓ ' + (datos.nombreCompleto || datos.dni || datos.numero); estado.classList.remove('error'); estado.classList.add('ok'); } if (escaneoEstado) escaneoEstado.textContent = '✅ Escaneo OK'; setStatus('Escaneo OK', 'active'); if (btnRepetir) btnRepetir.hidden = false; reproducirSonidoExito(); vibrarExito(); return; }
-        mostrarErrorDocumento('Documento no reconocido', `No pudimos interpretar este código como un documento de ${paisElegibleNombre}.`); if (estado) { estado.textContent = '⚠️ No se pudieron extraer datos'; estado.classList.add('error'); } setStatus('Sin datos', 'error'); if (btnRepetir) btnRepetir.hidden = false; reproducirSonidoError(); vibrarError();
+        mostrarErrorDocumento('Documento no reconocido', `No pudimos interpretar este código como un documento de ${paisElegidoNombre}.`); if (estado) { estado.textContent = '⚠️ No se pudieron extraer datos'; estado.classList.add('error'); } setStatus('Sin datos', 'error'); if (btnRepetir) btnRepetir.hidden = false; reproducirSonidoError(); vibrarError();
       }; 
       imageEl.onerror = () => { mostrarToast('No se pudo abrir la imagen', 'error'); setStatus('Error', 'error'); };
       imageEl.src = src;
@@ -546,6 +554,12 @@
   
   async function abrirModalDomicilio() {
     if (!ultimoResultado) { mostrarToast('Primero escaneá el frente', 'error'); return; }
+    
+    // 🔥 PRECARGA TESSERACT
+    if (typeof DomicilioOCR !== 'undefined' && DomicilioOCR.precargar) {
+      DomicilioOCR.precargar().catch(console.warn);
+    }
+
     if (modalDomicilio) modalDomicilio.hidden = false; if (domicilioPreview) domicilioPreview.hidden = true; if (domicilioResultado) domicilioResultado.hidden = true; if (domicilioProgress) domicilioProgress.hidden = true;
     if (btnCapturarDomicilio) btnCapturarDomicilio.hidden = false; if (btnReintentarDomicilio) btnReintentarDomicilio.hidden = true; if (btnGuardarDomicilio) btnGuardarDomicilio.hidden = true;
     [domInputDomicilio, domInputNacimiento, domInputCuil, domInputVencimiento, domInputNacionalidad].forEach(inp => { if (inp) inp.value = ''; });
@@ -574,12 +588,11 @@
     if (modalDomicilio) modalDomicilio.hidden = true; domicilioTrack = null; domicilioFlashSoportado = false; domicilioFlashEncendido = false; if (domicilioFlashBtn) domicilioFlashBtn.classList.remove('encendido');
   }
 
-  // --- LÓGICA DE AUTO-ESCANEO DEL REVERSO ---
   async function iniciarAutoScanDomicilio() {
     autoScanActivo = true;
     autoScanProcesando = false;
     
-    if (btnCapturarDomicilio) btnCapturarDomicilio.hidden = true; // Ocultar botón manual
+    if (btnCapturarDomicilio) btnCapturarDomicilio.hidden = true; 
     if (domicilioProgress) domicilioProgress.hidden = false;
     if (domicilioProgressText) domicilioProgressText.textContent = 'Buscando texto automáticamente...';
     if (domicilioProgressFill) domicilioProgressFill.style.width = '0%';
@@ -597,8 +610,7 @@
       autoScanProcesando = true;
       intentos++;
 
-      // Si pasan 8 intentos (~20 seg) y no lee, habilitar manual
-      if (intentos > 8) {
+      if (intentos > 6) { // Si falla 6 veces (aprox 15-20s), damos paso al botón manual
         autoScanActivo = false;
         if (domicilioProgress) domicilioProgress.hidden = true;
         if (btnCapturarDomicilio) btnCapturarDomicilio.hidden = false;
@@ -609,22 +621,18 @@
       if (domicilioProgressText) domicilioProgressText.textContent = `Buscando datos automáticamente... (Intento ${intentos})`;
       if (domicilioProgressFill) domicilioProgressFill.style.width = '0%';
 
-      // Tomar 2 frames y elegir el más nítido
       const c = await capturarMasNitido(domicilioVideo, 2, 100);
 
       try {
-        // Leer con Tesseract
         const res = await DomicilioOCR.leer(c, paisSeleccionado, (p) => {
           if (domicilioProgressFill) domicilioProgressFill.style.width = (p * 100) + '%';
         });
 
-        if (!autoScanActivo) return; // Si el usuario canceló
+        if (!autoScanActivo) return; 
 
-        // ¿Tenemos datos suficientes?
         const tieneDatos = res.domicilio || res.cuil || res.fechaVencimiento || res.lugarNacimiento;
 
         if (tieneDatos) {
-          // ¡ÉXITO! Autocapturamos la foto
           autoScanActivo = false;
           detenerCamaraModal();
 
@@ -651,7 +659,7 @@
       }
 
       autoScanProcesando = false;
-      if (autoScanActivo) setTimeout(loop, 500); // Esperar medio segundo y reintentar
+      if (autoScanActivo) setTimeout(loop, 500);
     };
 
     loop();
@@ -712,7 +720,6 @@
     cerrarModalDomicilio();
   }
 
-  // EVENTS
   if (btnCamara) btnCamara.addEventListener('click', iniciarCamara);
   if (btnRetryCamara) btnRetryCamara.addEventListener('click', iniciarCamara);
   if (btnRepetir) { btnRepetir.addEventListener('click', async () => { if (resultado) resultado.hidden = true; if (img) { img.hidden = true; img.src = ''; } if (video) video.hidden = false; btnRepetir.hidden = true; if (estado) { estado.textContent = 'Apuntá al código del documento.'; estado.classList.remove('ok', 'error'); } if (escaneoEstado) escaneoEstado.textContent = ''; await iniciarCamara(); }); }
