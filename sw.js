@@ -1,6 +1,6 @@
 // Service worker - Escáner de Documentos
 // Subilo al repo con el nombre sw.js. Subí el número de CACHE_NAME en cada cambio grande.
-const CACHE_NAME = 'escaner-dni-v24';
+const CACHE_NAME = 'escaner-dni-v25';
 const ASSETS = [
   './', './index.html', './manifest.json', './css/styles.css',
   './js/validators.js', './js/parsers-mundo.js', './js/parser.js',
