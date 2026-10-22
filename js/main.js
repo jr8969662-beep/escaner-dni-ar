@@ -1,7 +1,6 @@
 (() => {
   'use strict';
 
-  // --- CONFIGURACIÓN DE SUPABASE ---
   const SUPABASE_URL = 'https://TU_SUPABASE_URL.supabase.co'; // <-- REEMPLAZAR
   const SUPABASE_KEY = 'TU_SUPABASE_ANON_KEY'; // <-- REEMPLAZAR
   let supabaseClient = null;
@@ -18,6 +17,13 @@
   const BRILLO_UMBRAL_BAJO = 80;
   const BRILLO_UMBRAL_ALTO = 140;
   let autoFlashActivo = false;
+
+  // --- CÁMARA REVERSO (PARCHE) ---
+  const RATIO_DNI = 1.586;
+  const UMBRAL_OSCURO = 85;
+  const UMBRAL_REFLEJO = 0.04;
+  const HINT_OK = 'Encajá el reverso del DNI en el marco';
+  let monitorLuz = null, ultimoCambioLinterna = 0, noEncenderHasta = 0, linternaManual = false;
 
   function log(msg) { if (DEBUG) console.log(msg); }
 
@@ -101,7 +107,6 @@
   let domicilioFlashSoportado = false;
   let domicilioFlashEncendido = false;
   
-  // Variables para el Auto-Escaneo
   let autoScanActivo = false;
   let autoScanProcesando = false;
 
@@ -551,7 +556,170 @@
   async function activarLinternaReverso() { if (!domicilioTrack || !domicilioFlashSoportado) return; try { await domicilioTrack.applyConstraints({ advanced: [{ torch: true }] }); domicilioFlashEncendido = true; if (domicilioFlashBtn) domicilioFlashBtn.classList.add('encendido'); } catch (e) {} }
   async function apagarLinternaReverso() { if (!domicilioTrack || !domicilioFlashEncendido) return; try { await domicilioTrack.applyConstraints({ advanced: [{ torch: false }] }); domicilioFlashEncendido = false; if (domicilioFlashBtn) domicilioFlashBtn.classList.remove('encendido'); } catch (e) {} }
   async function toggleLinternaReverso() { if (!domicilioTrack || !domicilioFlashSoportado) return; if (domicilioFlashEncendido) await apagarLinternaReverso(); else await activarLinternaReverso(); }
-  
+
+  // ==========================================
+  // PARCHES DE CÁMARA REVERSO (parche-camara.js)
+  // ==========================================
+  function areaVisible(videoEl) {
+    const vr = videoEl.getBoundingClientRect();
+    const vw = videoEl.videoWidth, vh = videoEl.videoHeight;
+    const fit = getComputedStyle(videoEl).objectFit;
+    if (vw && vh && (fit === 'contain' || fit === 'scale-down')) {
+      const s = Math.min(vr.width / vw, vr.height / vh), w = vw * s, h = vh * s;
+      return { left: vr.left + (vr.width - w) / 2, top: vr.top + (vr.height - h) / 2, width: w, height: h };
+    }
+    return { left: vr.left, top: vr.top, width: vr.width, height: vr.height };
+  }
+
+  function marcoClient() {
+    const vr = areaVisible(domicilioVideo);
+    let w = vr.width * 0.92, h = w / RATIO_DNI;
+    if (h > vr.height * 0.92) { h = vr.height * 0.92; w = h * RATIO_DNI; }
+    return { left: vr.left + (vr.width - w) / 2, top: vr.top + (vr.height - h) / 2, width: w, height: h };
+  }
+
+  function rectEnVideo(videoEl, m, margen = 0) {
+    const vr = videoEl.getBoundingClientRect();
+    const vw = videoEl.videoWidth, vh = videoEl.videoHeight;
+    const fit = getComputedStyle(videoEl).objectFit;
+    let sx, sy;
+    if (fit === 'cover') sx = sy = Math.max(vr.width / vw, vr.height / vh);
+    else if (fit === 'contain' || fit === 'scale-down') sx = sy = Math.min(vr.width / vw, vr.height / vh);
+    else { sx = vr.width / vw; sy = vr.height / vh; }
+    const offX = (vr.width - vw * sx) / 2, offY = (vr.height - vh * sy) / 2;
+    let x = (m.left - vr.left - offX) / sx, y = (m.top - vr.top - offY) / sy;
+    let w = m.width / sx, h = m.height / sy;
+    const mx = w * margen, my = h * margen;
+    x -= mx; y -= my; w += 2 * mx; h += 2 * my;
+    const x0 = Math.max(0, x), y0 = Math.max(0, y);
+    return { x: x0, y: y0, w: Math.min(vw, x + w) - x0, h: Math.min(vh, y + h) - y0 };
+  }
+
+  function posicionarMarco() {
+    const marco = document.getElementById('dni-marco');
+    const wrap = document.getElementById('domicilio-camera-wrap');
+    if (!marco || !wrap || !domicilioVideo || !domicilioVideo.videoWidth) return;
+    const m = marcoClient(), wr = wrap.getBoundingClientRect();
+    Object.assign(marco.style, {
+      left: (m.left - wr.left) + 'px', top: (m.top - wr.top) + 'px',
+      width: m.width + 'px', height: m.height + 'px'
+    });
+  }
+
+  function prepararMarcoDomicilio() {
+    const wrap = document.getElementById('domicilio-camera-wrap');
+    if (!wrap) return;
+    if (!document.getElementById('dni-marco-css')) {
+      const st = document.createElement('style');
+      st.id = 'dni-marco-css';
+      st.textContent =
+        '.dni-marco{position:absolute;z-index:2;display:none;border:2px solid rgba(255,255,255,.95);border-radius:10px;box-shadow:0 0 0 9999px rgba(0,0,0,.45);pointer-events:none;transition:border-color .2s}' +
+        '.dni-marco.alerta{border-color:#fbbf24}' +
+        '.dni-marco-hint{position:absolute;left:50%;bottom:6px;transform:translateX(-50%);white-space:nowrap;max-width:96%;overflow:hidden;text-overflow:ellipsis;background:rgba(0,0,0,.65);color:#fff;font-size:12px;padding:4px 10px;border-radius:12px}';
+      document.head.appendChild(st);
+    }
+    if (getComputedStyle(wrap).position === 'static') wrap.style.position = 'relative';
+    wrap.style.overflow = 'hidden';
+    const guia = wrap.querySelector('.domicilio-guia');
+    if (guia) guia.style.display = 'none';
+    let marco = document.getElementById('dni-marco');
+    if (!marco) {
+      marco = document.createElement('div');
+      marco.id = 'dni-marco';
+      marco.className = 'dni-marco';
+      marco.innerHTML = '<span class="dni-marco-hint" id="dni-marco-hint"></span>';
+      wrap.appendChild(marco);
+    }
+    marco.style.display = 'block';
+    document.getElementById('dni-marco-hint').textContent = HINT_OK;
+    linternaManual = false; noEncenderHasta = 0; ultimoCambioLinterna = 0;
+    posicionarMarco();
+  }
+
+  function ocultarMarcoDomicilio() {
+    const marco = document.getElementById('dni-marco');
+    if (marco) marco.style.display = 'none';
+  }
+  window.addEventListener('resize', posicionarMarco);
+
+  function decidirLuz(e) {
+    let accion = null;
+    if (e.soportada && !e.manual && e.ahora - e.ultimoCambio > 1500) {
+      if (e.encendida && e.quemado > UMBRAL_REFLEJO) accion = 'apagar';
+      else if (!e.encendida && e.media < UMBRAL_OSCURO && e.ahora >= e.noEncenderHasta) accion = 'encender';
+    }
+    const hint = e.quemado > UMBRAL_REFLEJO ? 'Hay reflejo: inclinalo un poco'
+      : (e.media < 60 ? 'Poca luz: acercate a una lámpara' : HINT_OK);
+    return { accion, hint };
+  }
+
+  function medirLuz() {
+    const r = rectEnVideo(domicilioVideo, marcoClient(), 0);
+    if (r.w < 10 || r.h < 10) return null;
+    const w = 96, h = Math.max(2, Math.round(w * r.h / r.w));
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    const x = c.getContext('2d', { willReadFrequently: true });
+    x.drawImage(domicilioVideo, r.x, r.y, r.w, r.h, 0, 0, w, h);
+    const d = x.getImageData(0, 0, w, h).data;
+    let suma = 0, quemados = 0;
+    for (let i = 0; i < d.length; i += 4) {
+      const l = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+      suma += l; if (l >= 250) quemados++;
+    }
+    const n = d.length / 4;
+    return { media: suma / n, quemado: quemados / n };
+  }
+
+  function detenerMonitorLuz() { if (monitorLuz) { clearInterval(monitorLuz); monitorLuz = null; } }
+
+  function iniciarMonitorLuz() {
+    detenerMonitorLuz();
+    monitorLuz = setInterval(async () => {
+      if (!domicilioVideo || !domicilioVideo.videoWidth) return;
+      const luz = medirLuz();
+      if (!luz) return;
+      const ahora = Date.now();
+      const { accion, hint } = decidirLuz({
+        media: luz.media, quemado: luz.quemado, encendida: domicilioFlashEncendido,
+        soportada: domicilioFlashSoportado, manual: linternaManual,
+        ahora, ultimoCambio: ultimoCambioLinterna, noEncenderHasta
+      });
+      if (accion === 'encender') { await activarLinternaReverso(); ultimoCambioLinterna = ahora; }
+      if (accion === 'apagar') { await apagarLinternaReverso(); ultimoCambioLinterna = ahora; noEncenderHasta = ahora + 6000; }
+      const marco = document.getElementById('dni-marco'), txt = document.getElementById('dni-marco-hint');
+      if (txt) txt.textContent = hint;
+      if (marco) marco.classList.toggle('alerta', hint !== HINT_OK);
+    }, 600);
+  }
+
+  async function subirResolucion() {
+    if (!domicilioTrack || !domicilioTrack.applyConstraints) return;
+    try {
+      await domicilioTrack.applyConstraints({ width: { ideal: 3840 }, height: { ideal: 2160 } });
+      await new Promise(r => setTimeout(r, 600));
+      posicionarMarco();
+    } catch (e) {}
+  }
+
+  async function capturarMasNitidoRecortado(n = 2, pausaMs = 100) {
+    let mejor = null, mejorScore = -1;
+    for (let i = 0; i < n; i++) {
+      let r = rectEnVideo(domicilioVideo, marcoClient(), 0.03);
+      if (r.w < 50 || r.h < 50) r = { x: 0, y: 0, w: domicilioVideo.videoWidth, h: domicilioVideo.videoHeight };
+      const c = document.createElement('canvas');
+      c.width = Math.round(r.w); c.height = Math.round(r.h);
+      c.getContext('2d').drawImage(domicilioVideo, r.x, r.y, r.w, r.h, 0, 0, c.width, c.height);
+      const s = nitidez(c);
+      if (s > mejorScore) { mejorScore = s; mejor = c; }
+      if (i < n - 1) await new Promise(r2 => setTimeout(r2, pausaMs));
+    }
+    return mejor;
+  }
+
+  // ==========================================
+  // MODAL REVERSO
+  // ==========================================
   async function abrirModalDomicilio() {
     if (!ultimoResultado) { mostrarToast('Primero escaneá el frente', 'error'); return; }
     
@@ -573,21 +741,22 @@
       
       domicilioFlashSoportado = !!caps.torch; if (domicilioFlashBtn) { if (domicilioFlashSoportado) { domicilioFlashBtn.style.display = 'flex'; } else { domicilioFlashBtn.style.display = 'none'; } }
       
-      // Iniciar escaneo automático
+      prepararMarcoDomicilio();
+      iniciarMonitorLuz();
+      
       iniciarAutoScanDomicilio();
     } catch (e) { mostrarToast('No se pudo acceder a la cámara', 'error'); if (modalDomicilio) modalDomicilio.hidden = true; }
   }
   
   async function cerrarModalDomicilio() {
+    detenerMonitorLuz();
+    ocultarMarcoDomicilio();
     autoScanActivo = false;
     autoScanProcesando = false;
     await apagarLinternaReverso(); if (domicilioStream) { domicilioStream.getTracks().forEach(t => t.stop()); domicilioStream = null; } if (domicilioVideo) domicilioVideo.srcObject = null;
     if (modalDomicilio) modalDomicilio.hidden = true; domicilioTrack = null; domicilioFlashSoportado = false; domicilioFlashEncendido = false; if (domicilioFlashBtn) domicilioFlashBtn.classList.remove('encendido');
   }
 
-  // ==========================================
-  // PARCHES DE AUTO-ESCANEO (parche-main.js)
-  // ==========================================
   function mostrarDebugOCR(raw) {
     let pre = document.getElementById('dom-debug-pre');
     if (!pre && domicilioResultado) {
@@ -628,11 +797,13 @@
       return;
     }
 
+    await subirResolucion();
+
     for (let intento = 1; intento <= MAX_INTENTOS && autoScanActivo && !completo(); intento++) {
       if (domicilioProgressText) domicilioProgressText.textContent = `Leyendo el reverso… (${intento}/${MAX_INTENTOS})`;
       if (domicilioProgressFill) domicilioProgressFill.style.width = '0%';
 
-      const c = await capturarMasNitido(domicilioVideo, 2, 100);
+      const c = await capturarMasNitidoRecortado(2, 100);
       mejorCanvas = mejorCanvas || c;
       try {
         const res = await DomicilioOCR.leer(c, paisSeleccionado, (p) => {
@@ -688,6 +859,8 @@
   }
 
   function detenerCamaraModal() {
+    detenerMonitorLuz();
+    ocultarMarcoDomicilio();
     if (domicilioStream) { domicilioStream.getTracks().forEach(t => t.stop()); domicilioStream = null; }
     domicilioTrack = null;
     apagarLinternaReverso();
@@ -742,6 +915,7 @@
     cerrarModalDomicilio();
   }
 
+  // EVENTOS
   if (btnCamara) btnCamara.addEventListener('click', iniciarCamara);
   if (btnRetryCamara) btnRetryCamara.addEventListener('click', iniciarCamara);
   if (btnRepetir) { btnRepetir.addEventListener('click', async () => { if (resultado) resultado.hidden = true; if (img) { img.hidden = true; img.src = ''; } if (video) video.hidden = false; btnRepetir.hidden = true; if (estado) { estado.textContent = 'Apuntá al código del documento.'; estado.classList.remove('ok', 'error'); } if (escaneoEstado) escaneoEstado.textContent = ''; await iniciarCamara(); }); }
@@ -759,12 +933,13 @@
   if (btnCerrarModalDomicilio) btnCerrarModalDomicilio.addEventListener('click', cerrarModalDomicilio);
   if (btnCancelarDomicilio) btnCancelarDomicilio.addEventListener('click', cerrarModalDomicilio);
   
-  // Listener para el botón manual
   if (btnCapturarDomicilio) btnCapturarDomicilio.addEventListener('click', iniciarAutoScanDomicilio);
   
   if (btnReintentarDomicilio) btnReintentarDomicilio.addEventListener('click', reintentarDomicilio);
   if (btnGuardarDomicilio) btnGuardarDomicilio.addEventListener('click', guardarDomicilioDesdeModal);
-  if (domicilioFlashBtn) domicilioFlashBtn.addEventListener('click', toggleLinternaReverso);
+  
+  if (domicilioFlashBtn) domicilioFlashBtn.addEventListener('click', () => { linternaManual = true; toggleLinternaReverso(); });
+  
   if (modalDomicilio) { modalDomicilio.addEventListener('click', (e) => { if (e.target === modalDomicilio) cerrarModalDomicilio(); }); }
 
   window.addEventListener('beforeunload', () => { if (stream) stream.getTracks().forEach(t => t.stop()); if (domicilioStream) domicilioStream.getTracks().forEach(t => t.stop()); if (stopScan) stopScan(); });
