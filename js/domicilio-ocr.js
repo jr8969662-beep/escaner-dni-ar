@@ -1,10 +1,28 @@
+/**
+ * OCR del reverso del DNI argentino (Tesseract.js v5)
+ *
+ * - Texto (domicilio, lugar de nacimiento, CUIL): pasada 1 sobre la imagen completa.
+ * - MRZ (vencimiento, nacionalidad): pasada 2 sobre el borde inferior, solo A-Z 0-9 <
+ *   (se hace únicamente si la pasada 1 no encontró una MRZ verificada).
+ *
+ * Uso:
+ *   const r = await DomicilioOCR.leer(canvasOImagen, 'arg', (p) => { ... }, { dni: '12345678' });
+ *   // r = { raw, domicilio, lugarNacimiento, cuil, fechaVencimiento, nacionalidad, mrzVerificada }
+ *
+ * Para ver el texto crudo que lee el OCR: DomicilioOCR.setDebug(true)
+ */
+
 const DomicilioOCR = (() => {
   'use strict';
 
   let DEBUG = false;
   const log = (...args) => { if (DEBUG) console.log(...args); };
 
-  const ANCHO_MIN = 1500; 
+  // ============================================
+  // CONFIGURACIÓN
+  // ============================================
+  const ANCHO_MIN = 1800;              // si la imagen es más angosta, se agranda hasta este ancho
+  const FRACCIONES_MRZ = [0.35, 0.5];  // porción inferior que se recorta para buscar la MRZ
 
   const PARAMS_TEXTO = {
     tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZÁÉÍÓÚÑabcdefghijklmnopqrstuvwxyzáéíóúñ0123456789 .,-°ºª/()<>:',
@@ -18,15 +36,29 @@ const DomicilioOCR = (() => {
     tessedit_pageseg_mode: '6'
   };
 
+  // Zona superior (domicilio / lugar): sin whitelist, para no filtrar caracteres reales (° , ( ) etc.)
+  const PARAMS_ZONA = {
+    tessedit_char_whitelist: '',
+    preserve_interword_spaces: '1',
+    tessedit_pageseg_mode: '6'
+  };
+
+  // ============================================
+  // WORKER (una sola instancia, progreso por etapas)
+  // ============================================
   let workerPromise = null;
   let progresoCb = null;
+  let etapaDesde = 0;
+  let etapaHasta = 1;
+
+  function etapa(desde, hasta) { etapaDesde = desde; etapaHasta = hasta; }
 
   function initWorker() {
     if (!workerPromise) {
       workerPromise = Tesseract.createWorker('spa', 1, {
         logger: (m) => {
           if (progresoCb && m.status === 'recognizing text') {
-            progresoCb(m.progress);
+            progresoCb(etapaDesde + m.progress * (etapaHasta - etapaDesde));
           }
         }
       }).catch((e) => { workerPromise = null; throw e; });
@@ -34,6 +66,16 @@ const DomicilioOCR = (() => {
     return workerPromise;
   }
 
+  async function liberar() {
+    if (!workerPromise) return;
+    const p = workerPromise;
+    workerPromise = null;
+    try { const w = await p; await w.terminate(); } catch (e) { /* nada */ }
+  }
+
+  // ============================================
+  // IMAGEN: agrandar, gris y estirar contraste
+  // ============================================
   function aElemento(fuente) {
     if (typeof fuente !== 'string') return Promise.resolve(fuente);
     return new Promise((resolve, reject) => {
@@ -47,7 +89,7 @@ const DomicilioOCR = (() => {
   function preprocesar(el) {
     const w0 = el.videoWidth || el.naturalWidth || el.width;
     const h0 = el.videoHeight || el.naturalHeight || el.height;
-    const escala = w0 < ANCHO_MIN ? Math.min(ANCHO_MIN / w0, 2.5) : 1; 
+    const escala = w0 < ANCHO_MIN ? Math.min(ANCHO_MIN / w0, 3) : 1;
     const w = Math.round(w0 * escala);
     const h = Math.round(h0 * escala);
 
@@ -62,10 +104,25 @@ const DomicilioOCR = (() => {
     const imgData = ctx.getImageData(0, 0, w, h);
     const d = imgData.data;
 
+    // Escala de grises + histograma
+    const hist = new Uint32Array(256);
     for (let i = 0; i < d.length; i += 4) {
-      const gris = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
-      let v = (gris - 128) * 1.4 + 128;
-      v = Math.max(0, Math.min(255, v));
+      const g = (0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]) | 0;
+      d[i] = g;
+      hist[g]++;
+    }
+
+    // Estirar contraste entre los percentiles 1 % y 99 % (se adapta a la luz de cada foto)
+    const total = w * h;
+    let acc = 0, lo = 0, hi = 255;
+    for (let g = 0; g < 256; g++) { acc += hist[g]; if (acc >= total * 0.01) { lo = g; break; } }
+    acc = 0;
+    for (let g = 255; g >= 0; g--) { acc += hist[g]; if (acc >= total * 0.01) { hi = g; break; } }
+    if (hi - lo < 30) { lo = 0; hi = 255; } // imagen casi plana: no estirar
+    const k = 255 / (hi - lo);
+
+    for (let i = 0; i < d.length; i += 4) {
+      const v = Math.max(0, Math.min(255, (d[i] - lo) * k));
       d[i] = d[i + 1] = d[i + 2] = v;
     }
     ctx.putImageData(imgData, 0, 0);
@@ -81,130 +138,307 @@ const DomicilioOCR = (() => {
     return r;
   }
 
-  // 🔥 EXTRACCIÓN DIRECTA (SIN REGEX COMPLEJAS)
-  function extraerDomicilio(texto) {
-    if (!texto) return null;
-    // Junta todo y lo pasa a mayúsculas
-    let limpio = texto.toUpperCase().replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
-    
-    // Busca la palabra "DOMICILIO" (con posibles errores de OCR)
-    let idx = limpio.indexOf('DOMICILIO');
-    if (idx === -1) idx = limpio.indexOf('D0MICILI0');
-    if (idx === -1) idx = limpio.indexOf('DOM1CILIO');
-    if (idx === -1) idx = limpio.indexOf('D0MICILIO');
+  function recortarSuperior(c, fraccion) {
+    const h = Math.round(c.height * fraccion);
+    const r = document.createElement('canvas');
+    r.width = c.width;
+    r.height = h;
+    r.getContext('2d').drawImage(c, 0, 0, c.width, h, 0, 0, c.width, h);
+    return r;
+  }
 
-    if (idx !== -1) {
-      // Corta desde el final de "DOMICILIO" en adelante
-      let resto = limpio.substring(idx + 9);
-      
-      // Busca dónde termina el domicilio (LUGAR o CUIL)
-      let fin = resto.indexOf('LUGAR');
-      if (fin === -1) fin = resto.indexOf('NACIMIENTO');
-      if (fin === -1) fin = resto.indexOf('CUIL');
-      
-      if (fin !== -1) resto = resto.substring(0, fin);
-
-      // Limpia los dos puntos iniciales o símbolos raros
-      let dom = resto.replace(/^[^A-Z0-9]+/, '').replace(/[^A-Z0-9\s.,\-°ºª]+$/, '').trim();
-      
-      // Si el texto tiene más de 5 letras, es válido
-      if (dom.length > 5) {
-        // Corrige algunos errores clásicos
-        dom = dom.replace(/PABLM/g, 'PABLO').replace(/NORT/g, 'NORTE').replace(/CAJ/g, 'CAPITAL');
-        return dom.toLowerCase().replace(/(?:^|\s)\S/g, c => c.toUpperCase());
+  // Umbral local (media en ventana, con imagen integral): separa tinta fina y clara
+  // de un fondo con dibujos. gris = Uint8ClampedArray de 1 canal; devuelve 0/255.
+  function umbralLocal(gris, w, h, radio, k) {
+    const ancho = w + 1;
+    const integral = new Float64Array(ancho * (h + 1));
+    for (let y = 0; y < h; y++) {
+      let fila = 0;
+      for (let x = 0; x < w; x++) {
+        fila += gris[y * w + x];
+        integral[(y + 1) * ancho + (x + 1)] = integral[y * ancho + (x + 1)] + fila;
       }
     }
-    return null;
+    const out = new Uint8ClampedArray(w * h);
+    for (let y = 0; y < h; y++) {
+      const y0 = Math.max(0, y - radio), y1 = Math.min(h, y + radio + 1);
+      for (let x = 0; x < w; x++) {
+        const x0 = Math.max(0, x - radio), x1 = Math.min(w, x + radio + 1);
+        const area = (x1 - x0) * (y1 - y0);
+        const suma = integral[y1 * ancho + x1] - integral[y0 * ancho + x1]
+                   - integral[y1 * ancho + x0] + integral[y0 * ancho + x0];
+        out[y * w + x] = gris[y * w + x] < (suma / area) * k ? 0 : 255;
+      }
+    }
+    return out;
+  }
+
+  function binarizarCanvas(c) {
+    const w = c.width, h = c.height;
+    const ctx = c.getContext('2d', { willReadFrequently: true });
+    const img = ctx.getImageData(0, 0, w, h), d = img.data;
+    const gris = new Uint8ClampedArray(w * h);
+    for (let i = 0, p = 0; i < d.length; i += 4, p++) gris[p] = d[i];
+    const bin = umbralLocal(gris, w, h, Math.max(15, Math.round(w / 60)), 0.85);
+    for (let i = 0, p = 0; i < d.length; i += 4, p++) d[i] = d[i + 1] = d[i + 2] = bin[p];
+    ctx.putImageData(img, 0, 0);
+    return c;
+  }
+
+  // ============================================
+  // TEXTO: etiquetas tolerantes a errores de OCR
+  // ============================================
+  // Cada letra acepta sus confusiones típicas (O/0, I/1/L, A/4, E/3, S/5, B/8, G/6, Z/2) y acentos.
+  const CLASES = {
+    A: '[A4ÁÀ]', E: '[E3ÉÈ]', I: '[I1LÍÌ]', L: '[L1I]', O: '[O0ÓÒ]',
+    U: '[UÚÜ]', S: '[S5]', B: '[B8]', G: '[G6]', Z: '[Z2]'
+  };
+  const tol = (palabras) =>
+    palabras.split(' ').map(p => [...p].map(ch => CLASES[ch] || ch).join('')).join('\\s*');
+  const unir = (lista) => lista.map(x => tol(x)).join('|');
+
+  const L_DOMICILIO = tol('DOMICILIO');
+  const L_LUGAR_NAC = tol('LUGAR DE NACIMIENTO');
+  const L_CUIL = tol('CUIL');
+
+  // Palabras donde corta cada campo (la siguiente etiqueta o el inicio de la MRZ)
+  const STOPS_DOMICILIO = unir(['LUGAR', 'NACIMIENTO', 'TRAMITE', 'EJEMPLAR', 'CUIL', 'FECHA', 'NACIONALIDAD', 'IDARG']);
+  const STOPS_LUGAR = unir(['DOMICILIO', 'TRAMITE', 'EJEMPLAR', 'CUIL', 'FECHA', 'NACIONALIDAD', 'IDARG']);
+
+  function normalizar(texto) {
+    return (texto || '')
+      .toUpperCase()
+      .replace(/[|_=~`]+/g, ' ')
+      .replace(/\s+/g, ' ')   // colapsa saltos de línea: así el valor puede ocupar varias líneas
+      .trim();
+  }
+
+  function limpiarValor(v) {
+    return v
+      .replace(/^(?:ADDRESS|PLACE OF BIRTH)\b[\s:./-]*/i, '') // etiqueta bilingüe
+      .replace(/\s+/g, ' ')
+      .replace(/^[\s:./-]+|[\s:.,/-]+$/g, '')
+      .trim();
+  }
+
+  function valorValido(v) {
+    if (!v || v.length < 4 || v.length > 150 || v.includes('<')) return false;
+    return (v.match(/[A-ZÁÉÍÓÚÑ0-9]/gi) || []).length >= 3;
+  }
+
+  function titulo(s) {
+    return s.toLowerCase()
+      .replace(/(^|[\s(])([^\s(])/g, (_, a, b) => a + b.toUpperCase())
+      .replace(/\bS\/n\b/g, 'S/N')
+      .replace(/\b(Ii|Iii|Iv|Vi|Vii|Viii|Ix|Xi|Xii|Xiii)\b/g, (m) => m.toUpperCase()); // números romanos
+  }
+
+  function extraerCampo(texto, etiqueta, stops) {
+    const t = normalizar(texto);
+    const re = new RegExp(`${etiqueta}[:\\s./-]*(.*?)(?=\\s(?:${stops})|<|$)`, 'i');
+    const m = re.exec(t);
+    if (!m) return null;
+    const v = limpiarValor(m[1]);
+    return valorValido(v) ? titulo(v) : null;
+  }
+
+  function extraerDomicilio(texto) {
+    return extraerCampo(texto, L_DOMICILIO, STOPS_DOMICILIO);
   }
 
   function extraerLugarNacimiento(texto) {
-    if (!texto) return null;
-    let limpio = texto.toUpperCase().replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
-    
-    let idx = limpio.indexOf('LUGAR DE NACIMIENTO');
-    if (idx === -1) idx = limpio.indexOf('NACIMIENTO');
-    
-    if (idx !== -1) {
-      // Si encontró "LUGAR DE NACIMIENTO" (20 letras), corta desde ahí. Si no, desde "NACIMIENTO" (10 letras)
-      let salto = limpio.indexOf('LUGAR DE NACIMIENTO') !== -1 ? 19 : 9;
-      let resto = limpio.substring(idx + salto);
-      
-      // Termina en DOMICILIO o CUIL
-      let fin = resto.indexOf('DOMICILIO');
-      if (fin === -1) fin = resto.indexOf('CUIL');
-      if (fin !== -1) resto = resto.substring(0, fin);
-
-      let lugar = resto.replace(/^[^A-Z0-9]+/, '').replace(/[^A-Z0-9\s.,\-]+$/, '').trim();
-      
-      if (lugar.length > 3) {
-        return lugar.toLowerCase().replace(/(?:^|\s)\S/g, c => c.toUpperCase());
-      }
-    }
-    return null;
+    return extraerCampo(texto, L_LUGAR_NAC, STOPS_LUGAR);
   }
 
-  function extraerCUIL(texto) {
+  // ============================================
+  // CUIL: se valida prefijo + dígito verificador (y se cruza con el DNI si lo tenemos)
+  // ============================================
+  const PREFIJOS_CUIL = ['20', '23', '24', '27', '30', '33', '34'];
+  const PESOS_CUIL = [5, 4, 3, 2, 7, 6, 5, 4, 3, 2];
+
+  function cuilValido(c) {
+    const d = String(c).replace(/\D/g, '');
+    if (d.length !== 11 || !PREFIJOS_CUIL.includes(d.slice(0, 2))) return false;
+    const suma = PESOS_CUIL.reduce((a, p, i) => a + p * Number(d[i]), 0);
+    let v = 11 - (suma % 11);
+    if (v === 11) v = 0;
+    return v === Number(d[10]); // v === 10 nunca coincide: ese caso lo resuelve el prefijo 23
+  }
+
+  const A_DIGITO_CUIL = { O: '0', Q: '0', D: '0', I: '1', L: '1', '|': '1', Z: '2', S: '5', B: '8', G: '6' };
+
+  function extraerCUIL(texto, contexto = {}) {
     if (!texto) return null;
-    const m = texto.match(/\b(\d{2})[-\s.]?(\d{8})[-\s.]?(\d)\b/);
-    if (m) return `${m[1]}-${m[2]}-${m[3]}`;
-    return null;
+    const dni = String(contexto.dni || '').replace(/\D/g, '');
+    const dniPad = dni ? dni.padStart(8, '0') : '';
+    const t = texto.toUpperCase();
+
+    const buscar = (segmento, exigirDni) => {
+      for (const m of segmento.matchAll(/\b(\d{2})[-\s.]?(\d{8})[-\s.]?(\d)\b/g)) {
+        const c = `${m[1]}-${m[2]}-${m[3]}`;
+        if (!cuilValido(c)) continue;
+        if (exigirDni && dniPad && m[2] !== dniPad) continue;
+        return c;
+      }
+      return null;
+    };
+
+    // Segmento justo después de la etiqueta "CUIL", con letras confundidas pasadas a dígitos
+    // (el dígito verificador protege de falsos positivos)
+    const i = t.search(new RegExp(L_CUIL, 'i'));
+    const cercano = i >= 0
+      ? t.slice(i, i + 40).replace(/[OQDIL|ZSBG]/g, ch => A_DIGITO_CUIL[ch] || ch)
+      : '';
+
+    return (cercano && buscar(cercano, true))
+      || buscar(t, true)
+      || (cercano && buscar(cercano, false))
+      || null;
+  }
+
+  // ============================================
+  // MRZ (formato TD1, 3 líneas de 30): vencimiento y nacionalidad de la línea 2
+  // Línea 2: nacimiento(6) ctrl(1) sexo(1) vencimiento(6) ctrl(1) nacionalidad(3) ...
+  // ============================================
+  const NACIONALIDADES = {
+    ARG: 'ARGENTINA', CHL: 'CHILENA', URY: 'URUGUAYA', PRY: 'PARAGUAYA',
+    PER: 'PERUANA', BOL: 'BOLIVIANA', COL: 'COLOMBIANA', ECU: 'ECUATORIANA',
+    VEN: 'VENEZOLANA', BRA: 'BRASILEÑA'
+  };
+
+  const A_DIGITO = { O: '0', Q: '0', D: '0', I: '1', L: '1', Z: '2', S: '5', B: '8', G: '6' };
+  const A_LETRA = { 0: 'O', 1: 'I', 2: 'Z', 4: 'A', 5: 'S', 8: 'B', 6: 'G' };
+  const RE_MRZ = /(\d{6})([0-9<])([MF<])(\d{2})(\d{2})(\d{2})([0-9<])([A-Z]{3})/;
+
+  // Dígito de control ICAO 9303: pesos 7-3-1, letras A=10..Z=35, '<'=0
+  function digitoControl(s) {
+    const pesos = [7, 3, 1];
+    let suma = 0;
+    for (let i = 0; i < s.length; i++) {
+      const ch = s[i];
+      const v = ch === '<' ? 0 : /\d/.test(ch) ? Number(ch) : ch.charCodeAt(0) - 55;
+      suma += v * pesos[i % 3];
+    }
+    return suma % 10;
+  }
+
+  // Si la línea tiene el largo de una línea 2, corrige confusiones letra/dígito por posición
+  function repararLinea2(l) {
+    if (l.length < 28 || l.length > 32) return null;
+    const a = [...l];
+    for (let i = 0; i <= 14; i++) if (i !== 7) a[i] = A_DIGITO[a[i]] || a[i];
+    for (let i = 15; i <= 17; i++) a[i] = A_LETRA[a[i]] || a[i];
+    return a.join('');
+  }
+
+  function leerLineaMRZ(l) {
+    const m = RE_MRZ.exec(l);
+    if (!m) return null;
+    const [, nacim, dcNacim, , yy, mm, dd, dcVenc, pais] = m;
+    if (+mm < 1 || +mm > 12 || +dd < 1 || +dd > 31) return null;
+    return {
+      fechaVencimiento: `20${yy}-${mm}-${dd}`, // el vencimiento siempre es 20xx
+      nacionalidad: NACIONALIDADES[pais] || pais,
+      mrzVerificada:
+        String(digitoControl(nacim)) === dcNacim &&
+        String(digitoControl(yy + mm + dd)) === dcVenc
+    };
   }
 
   function extraerDesdeMRZ(texto) {
-    if (!texto) return { fechaVencimiento: null, nacionalidad: null };
-    const lineas = texto.toUpperCase().split(/[\r\n]+/).map(l => l.replace(/[^A-Z0-9<]/g, '')).filter(l => l.length >= 20);
-    const mrzLine = lineas.find(l => /\d{6}[0-9<][MF]\d{6}[0-9<][A-Z]{3}/.test(l));
+    const vacio = { fechaVencimiento: null, nacionalidad: null, mrzVerificada: null };
+    if (!texto) return vacio;
 
-    if (mrzLine) {
-      const idx = mrzLine.search(/[MF]/);
-      if (idx !== -1) {
-        const fechaVencRaw = mrzLine.substring(idx + 1, idx + 7);
-        const nacRaw = mrzLine.substring(idx + 8, idx + 11);
+    const lineas = texto.toUpperCase().split(/[\r\n]+/)
+      .map(l => l.replace(/[^A-Z0-9<]/g, ''))
+      .filter(l => l.length >= 20);
 
-        let vencimiento = null;
-        if (/^\d{6}$/.test(fechaVencRaw)) {
-          const yy = parseInt(fechaVencRaw.substring(0, 2));
-          const yyyy = yy > 30 ? 1900 + yy : 2000 + yy;
-          vencimiento = `${yyyy}-${fechaVencRaw.substring(2, 4)}-${fechaVencRaw.substring(4, 6)}`;
-        }
-
-        let nacionalidad = null;
-        const paises = { ARG: 'ARGENTINA', CHL: 'CHILENA', URY: 'URUGUAYA', PRY: 'PARAGUAYA', PER: 'PERUANA', BOL: 'BOLIVIANA', COL: 'COLOMBIANA', ECU: 'ECUATORIANA', VEN: 'VENEZOLANA', BRA: 'BRASILEÑA' };
-        if (paises[nacRaw]) nacionalidad = paises[nacRaw];
-
-        return { fechaVencimiento: vencimiento, nacionalidad: nacionalidad };
+    const hallazgos = [];
+    for (const l of lineas) {
+      for (const cand of [l, repararLinea2(l)]) {
+        const h = cand && leerLineaMRZ(cand);
+        if (h) hallazgos.push(h);
       }
     }
-    return { fechaVencimiento: null, nacionalidad: null };
+    // Preferimos el hallazgo cuyos dígitos de control cierran
+    return hallazgos.find(h => h.mrzVerificada) || hallazgos[0] || vacio;
   }
 
+  // ============================================
+  // LECTURA COMPLETA
+  // ============================================
   async function leer(fuente, pais = 'arg', onProgress, contexto = {}) {
+    void pais; // reservado para otros países
     progresoCb = typeof onProgress === 'function' ? onProgress : null;
+
     const w = await initWorker();
     const origen = await aElemento(fuente);
     const gris = preprocesar(origen);
 
+    // Pasada 1: texto completo
+    etapa(0, 0.4);
     await w.setParameters(PARAMS_TEXTO);
     const { data: { text } } = await w.recognize(gris);
     log('📄 OCR crudo del reverso:\n' + text);
 
-    let mrz = { fechaVencimiento: null, nacionalidad: null };
-    await w.setParameters(PARAMS_MRZ);
-    const { data: { text: textoMRZ } } = await w.recognize(recortarInferior(gris, 0.4));
-    const mrzData = extraerDesdeMRZ(textoMRZ || text);
-    if (mrzData.fechaVencimiento) mrz = mrzData;
+    // Pasada 2: MRZ sobre el borde inferior (solo si no hay una MRZ verificada)
+    let mrz = extraerDesdeMRZ(text);
+    if (!mrz.mrzVerificada) {
+      await w.setParameters(PARAMS_MRZ);
+      for (let i = 0; i < FRACCIONES_MRZ.length; i++) {
+        etapa(0.4 + i * 0.15, 0.55 + i * 0.15);
+        const { data: { text: textoMRZ } } = await w.recognize(recortarInferior(gris, FRACCIONES_MRZ[i]));
+        log(`📄 OCR MRZ (${FRACCIONES_MRZ[i] * 100}% inferior):\n` + textoMRZ);
+        const cand = extraerDesdeMRZ(textoMRZ);
+        if (cand.mrzVerificada || (!mrz.fechaVencimiento && cand.fechaVencimiento)) mrz = cand;
+        if (mrz.mrzVerificada) break;
+      }
+      await w.setParameters(PARAMS_TEXTO);
+    }
+
+    // Pasada 3: zona superior (domicilio / lugar de nacimiento) si la letra fina no se leyó
+    let domicilio = extraerDomicilio(text);
+    let lugar = extraerLugarNacimiento(text);
+    let textoZonas = '';
+    if (!domicilio || !lugar) {
+      await w.setParameters(PARAMS_ZONA);
+      const variantes = [[0.4, true], [0.4, false], [0.6, true]]; // [fracción superior, binarizar]
+      for (let i = 0; i < variantes.length && (!domicilio || !lugar); i++) {
+        const [fr, bin] = variantes[i];
+        etapa(0.7 + i * 0.1, 0.8 + i * 0.1);
+        let zona = recortarSuperior(gris, fr);
+        if (bin) zona = binarizarCanvas(zona);
+        const { data: { text: tz } } = await w.recognize(zona);
+        textoZonas += `\n--- zona ${Math.round(fr * 100)}%${bin ? ' binarizada' : ''} ---\n` + tz;
+        log('📄 OCR zona superior:\n' + tz);
+        domicilio = domicilio || extraerDomicilio(tz);
+        lugar = lugar || extraerLugarNacimiento(tz);
+      }
+      await w.setParameters(PARAMS_TEXTO);
+    }
 
     if (progresoCb) progresoCb(1);
 
     return {
-      raw: text,
-      domicilio: extraerDomicilio(text),
-      lugarNacimiento: extraerLugarNacimiento(text),
-      cuil: extraerCUIL(text),
+      raw: text + textoZonas,
+      domicilio,
+      lugarNacimiento: lugar,
+      cuil: extraerCUIL(text, contexto),
       fechaVencimiento: mrz.fechaVencimiento,
-      nacionalidad: mrz.nacionalidad
+      nacionalidad: mrz.nacionalidad,
+      mrzVerificada: mrz.mrzVerificada
     };
   }
 
-  return { leer, liberar: async () => { if (workerPromise) { const w = await workerPromise; w.terminate(); workerPromise = null; } }, setDebug: (v) => { DEBUG = !!v; } };
+  return {
+    leer,
+    liberar,
+    setDebug: (v) => { DEBUG = !!v; },
+    extraerDomicilio,
+    extraerLugarNacimiento,
+    extraerCUIL,
+    extraerDesdeMRZ,
+    cuilValido,
+    umbralLocal
+  };
 })();
