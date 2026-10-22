@@ -81,33 +81,36 @@ const DomicilioOCR = (() => {
     return r;
   }
 
-  // 🔥 PARSER A PRUEBA DE BALAS
+  // 🔥 EXTRACCIÓN DIRECTA (SIN REGEX COMPLEJAS)
   function extraerDomicilio(texto) {
     if (!texto) return null;
-    // Junta todo en una sola línea
-    let limpio = texto.toUpperCase().replace(/\s+/g, ' ').trim();
+    // Junta todo y lo pasa a mayúsculas
+    let limpio = texto.toUpperCase().replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
     
-    // Busca "DOMICILIO" tolerando errores de OCR (0 en vez de O)
-    const idx = limpio.search(/D[O0]M[I1L]C[I1L][I1L][O0]/i);
-    
+    // Busca la palabra "DOMICILIO" (con posibles errores de OCR)
+    let idx = limpio.indexOf('DOMICILIO');
+    if (idx === -1) idx = limpio.indexOf('D0MICILI0');
+    if (idx === -1) idx = limpio.indexOf('DOM1CILIO');
+    if (idx === -1) idx = limpio.indexOf('D0MICILIO');
+
     if (idx !== -1) {
-      // Toma todo el texto que sigue después de "DOMICILIO" (9 letras)
-      let resto = limpio.substring(idx + 9); 
-      resto = resto.replace(/^[^A-Z0-9]+/, ''); // Limpia los ":" o espacios iniciales
+      // Corta desde el final de "DOMICILIO" en adelante
+      let resto = limpio.substring(idx + 9);
       
-      // Corta el texto cuando encuentra "LUGAR" o "CUIL"
-      const fin = resto.search(/(LUGAR|NACIMIENTO|CUIL|TRAMITE|EJEMPLAR|IDARG)/i);
-      if (fin !== -1) {
-        resto = resto.substring(0, fin);
-      }
+      // Busca dónde termina el domicilio (LUGAR o CUIL)
+      let fin = resto.indexOf('LUGAR');
+      if (fin === -1) fin = resto.indexOf('NACIMIENTO');
+      if (fin === -1) fin = resto.indexOf('CUIL');
       
-      let dom = resto.trim().replace(/[\s:.,/-]+$/, '');
+      if (fin !== -1) resto = resto.substring(0, fin);
+
+      // Limpia los dos puntos iniciales o símbolos raros
+      let dom = resto.replace(/^[^A-Z0-9]+/, '').replace(/[^A-Z0-9\s.,\-°ºª]+$/, '').trim();
+      
+      // Si el texto tiene más de 5 letras, es válido
       if (dom.length > 5) {
-        // Corrige errores típicos
-        dom = dom.replace(/PABLM/gi, 'PABLO')
-                 .replace(/NORT/gi, 'NORTE')
-                 .replace(/CAJ/gi, 'CAPITAL')
-                 .replace(/\s*-\s*/g, ' - ');
+        // Corrige algunos errores clásicos
+        dom = dom.replace(/PABLM/g, 'PABLO').replace(/NORT/g, 'NORTE').replace(/CAJ/g, 'CAPITAL');
         return dom.toLowerCase().replace(/(?:^|\s)\S/g, c => c.toUpperCase());
       }
     }
@@ -116,27 +119,25 @@ const DomicilioOCR = (() => {
 
   function extraerLugarNacimiento(texto) {
     if (!texto) return null;
-    let limpio = texto.toUpperCase().replace(/\s+/g, ' ').trim();
+    let limpio = texto.toUpperCase().replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
     
-    let idx = limpio.search(/(LUGAR\s*DE\s*NACIMIENTO|NACIDO\s*EN)/i);
-    if (idx === -1) idx = limpio.search(/NACIMIENTO/i);
+    let idx = limpio.indexOf('LUGAR DE NACIMIENTO');
+    if (idx === -1) idx = limpio.indexOf('NACIMIENTO');
     
     if (idx !== -1) {
-      // Busca la palabra exacta para cortar
-      const match = limpio.substring(idx).match(/^(LUGAR\s*DE\s*NACIMIENTO|NACIDO\s*EN|NACIMIENTO)/i);
-      if (match) {
-        let resto = limpio.substring(idx + match[0].length);
-        resto = resto.replace(/^[^A-Z0-9]+/, '');
-        
-        const fin = resto.search(/(DOMICILIO|CUIL|TRAMITE|EJEMPLAR|IDARG)/i);
-        if (fin !== -1) {
-          resto = resto.substring(0, fin);
-        }
-        
-        let lugar = resto.trim().replace(/[\s:.,/-]+$/, '');
-        if (lugar.length > 3) {
-          return lugar.toLowerCase().replace(/(?:^|\s)\S/g, c => c.toUpperCase());
-        }
+      // Si encontró "LUGAR DE NACIMIENTO" (20 letras), corta desde ahí. Si no, desde "NACIMIENTO" (10 letras)
+      let salto = limpio.indexOf('LUGAR DE NACIMIENTO') !== -1 ? 19 : 9;
+      let resto = limpio.substring(idx + salto);
+      
+      // Termina en DOMICILIO o CUIL
+      let fin = resto.indexOf('DOMICILIO');
+      if (fin === -1) fin = resto.indexOf('CUIL');
+      if (fin !== -1) resto = resto.substring(0, fin);
+
+      let lugar = resto.replace(/^[^A-Z0-9]+/, '').replace(/[^A-Z0-9\s.,\-]+$/, '').trim();
+      
+      if (lugar.length > 3) {
+        return lugar.toLowerCase().replace(/(?:^|\s)\S/g, c => c.toUpperCase());
       }
     }
     return null;
