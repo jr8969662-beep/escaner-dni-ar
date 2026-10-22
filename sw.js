@@ -1,4 +1,4 @@
-const CACHE_NAME = 'escaner-dni-v19';
+const CACHE_NAME = 'escaner-dni-v20';
 const ASSETS = [
   './', './index.html', './manifest.json', './css/styles.css',
   './js/validators.js', './js/parsers-mundo.js', './js/parser.js',
