@@ -667,3 +667,9 @@ body {
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 4px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-tertiary); }
+
+/* Filtro de contraste para la cámara (Hace que el QR resalte) */
+.camera-viewport video {
+  filter: contrast(1.15) brightness(1.05) saturate(1.1);
+  transition: filter 0.3s ease;
+}
