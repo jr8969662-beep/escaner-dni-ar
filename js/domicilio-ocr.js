@@ -1,15 +1,15 @@
 /**
- * OCR del reverso del DNI argentino (Tesseract.js v5)
+ * OCR del reverso del DNI argentino (Versión Rápida - 2 Pasadas)
  */
+
 const DomicilioOCR = (() => {
   'use strict';
 
   let DEBUG = false;
   const log = (...args) => { if (DEBUG) console.log(...args); };
 
-  const ANCHO_MAX = 2200; 
-  const ANCHO_MIN = 1500; 
-  const FRACCIONES_MRZ = [0.4]; 
+  const ANCHO_MAX = 1600; 
+  const ANCHO_MIN = 1200; 
 
   const PARAMS_TEXTO = {
     tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZÁÉÍÓÚÑabcdefghijklmnopqrstuvwxyzáéíóúñ0123456789 .,-°ºª/()<>:',
@@ -23,25 +23,15 @@ const DomicilioOCR = (() => {
     tessedit_pageseg_mode: '6'
   };
 
-  const PARAMS_ZONA = {
-    tessedit_char_whitelist: '',
-    preserve_interword_spaces: '1',
-    tessedit_pageseg_mode: '6'
-  };
-
   let workerPromise = null;
   let progresoCb = null;
-  let etapaDesde = 0;
-  let etapaHasta = 1;
-
-  function etapa(desde, hasta) { etapaDesde = desde; etapaHasta = hasta; }
 
   function initWorker() {
     if (!workerPromise) {
       workerPromise = Tesseract.createWorker('spa', 1, {
         logger: (m) => {
           if (progresoCb && m.status === 'recognizing text') {
-            progresoCb(etapaDesde + m.progress * (etapaHasta - etapaDesde));
+            progresoCb(m.progress);
           }
         }
       }).catch((e) => { workerPromise = null; throw e; });
@@ -112,55 +102,15 @@ const DomicilioOCR = (() => {
     return c;
   }
 
-  function recortarInferior(c, fraccion) {
-    const h = Math.round(c.height * fraccion);
+  function recortar(c, desdeY, hastaY) {
+    const y1 = Math.round(c.height * desdeY);
+    const y2 = Math.round(c.height * hastaY);
+    const h = y2 - y1;
     const r = document.createElement('canvas');
-    r.width = c.width; r.height = h;
-    r.getContext('2d').drawImage(c, 0, c.height - h, c.width, h, 0, 0, c.width, h);
+    r.width = c.width;
+    r.height = h;
+    r.getContext('2d').drawImage(c, 0, y1, c.width, h, 0, 0, c.width, h);
     return r;
-  }
-
-  function recortarSuperior(c, fraccion) {
-    const h = Math.round(c.height * fraccion);
-    const r = document.createElement('canvas');
-    r.width = c.width; r.height = h;
-    r.getContext('2d').drawImage(c, 0, 0, c.width, h, 0, 0, c.width, h);
-    return r;
-  }
-
-  function umbralLocal(gris, w, h, radio, k) {
-    const ancho = w + 1;
-    const integral = new Float64Array(ancho * (h + 1));
-    for (let y = 0; y < h; y++) {
-      let fila = 0;
-      for (let x = 0; x < w; x++) {
-        fila += gris[y * w + x];
-        integral[(y + 1) * ancho + (x + 1)] = integral[y * ancho + (x + 1)] + fila;
-      }
-    }
-    const out = new Uint8ClampedArray(w * h);
-    for (let y = 0; y < h; y++) {
-      const y0 = Math.max(0, y - radio), y1 = Math.min(h, y + radio + 1);
-      for (let x = 0; x < w; x++) {
-        const x0 = Math.max(0, x - radio), x1 = Math.min(w, x + radio + 1);
-        const area = (x1 - x0) * (y1 - y0);
-        const suma = integral[y1 * ancho + x1] - integral[y0 * ancho + x1] - integral[y1 * ancho + x0] + integral[y0 * ancho + x0];
-        out[y * w + x] = gris[y * w + x] < (suma / area) * k ? 0 : 255;
-      }
-    }
-    return out;
-  }
-
-  function binarizarCanvas(c) {
-    const w = c.width, h = c.height;
-    const ctx = c.getContext('2d', { willReadFrequently: true });
-    const img = ctx.getImageData(0, 0, w, h), d = img.data;
-    const gris = new Uint8ClampedArray(w * h);
-    for (let i = 0, p = 0; i < d.length; i += 4, p++) gris[p] = d[i];
-    const bin = umbralLocal(gris, w, h, Math.max(15, Math.round(w / 60)), 0.85);
-    for (let i = 0, p = 0; i < d.length; i += 4, p++) d[i] = d[i + 1] = d[i + 2] = bin[p];
-    ctx.putImageData(img, 0, 0);
-    return c;
   }
 
   const CLASES = { A: '[A4ÁÀ]', E: '[E3ÉÈ]', I: '[I1LÍÌ]', L: '[L1I]', O: '[O0ÓÒ]', U: '[UÚÜ]', S: '[S5]', B: '[B8]', G: '[G6]', Z: '[Z2]' };
@@ -205,7 +155,7 @@ const DomicilioOCR = (() => {
 
   const PREFIJOS_CUIL = ['20', '23', '24', '27', '30', '33', '34'];
   const PESOS_CUIL = [5, 4, 3, 2, 7, 6, 5, 4, 3, 2];
-
+  
   function cuilValido(c) {
     const d = String(c).replace(/\D/g, '');
     if (d.length !== 11 || !PREFIJOS_CUIL.includes(d.slice(0, 2))) return false;
@@ -222,7 +172,6 @@ const DomicilioOCR = (() => {
     const dni = String(contexto.dni || '').replace(/\D/g, '');
     const dniPad = dni ? dni.padStart(8, '0') : '';
     const t = texto.toUpperCase();
-
     const buscar = (segmento, exigirDni) => {
       for (const m of segmento.matchAll(/\b(\d{2})[-\s.]?(\d{8})[-\s.]?(\d)\b/g)) {
         const c = `${m[1]}-${m[2]}-${m[3]}`;
@@ -232,10 +181,8 @@ const DomicilioOCR = (() => {
       }
       return null;
     };
-
     const i = t.search(new RegExp(L_CUIL, 'i'));
     const cercano = i >= 0 ? t.slice(i, i + 40).replace(/[OQDIL|ZSBG]/g, ch => A_DIGITO_CUIL[ch] || ch) : '';
-
     return (cercano && buscar(cercano, true)) || buscar(t, true) || (cercano && buscar(cercano, false)) || null;
   }
 
@@ -289,6 +236,7 @@ const DomicilioOCR = (() => {
     return hallazgos.find(h => h.mrzVerificada) || hallazgos[0] || vacio;
   }
 
+  // LECTURA RÁPIDA (Solo 2 pasadas)
   async function leer(fuente, pais = 'arg', onProgress, contexto = {}) {
     void pais;
     progresoCb = typeof onProgress === 'function' ? onProgress : null;
@@ -297,49 +245,30 @@ const DomicilioOCR = (() => {
     const origen = await aElemento(fuente);
     const gris = preprocesar(origen);
 
-    etapa(0, 0.4);
+    // Pasada 1: Solo el pedazo de arriba (Domicilio y Lugar)
+    const zonaSuperior = recortar(gris, 0, 0.60);
     await w.setParameters(PARAMS_TEXTO);
-    const { data: { text } } = await w.recognize(gris);
-    log('📄 OCR crudo del reverso:\n' + text);
+    const { data: { text: textArriba } } = await w.recognize(zonaSuperior);
+    
+    // Pasada 2: Solo el pedazo de abajo (MRZ)
+    const zonaInferior = recortar(gris, 0.60, 1);
+    await w.setParameters(PARAMS_MRZ);
+    const { data: { text: textAbajo } } = await w.recognize(zonaInferior);
 
-    let mrz = extraerDesdeMRZ(text);
-    if (!mrz.mrzVerificada) {
-      await w.setParameters(PARAMS_MRZ);
-      for (let i = 0; i < FRACCIONES_MRZ.length; i++) {
-        etapa(0.4 + i * 0.15, 0.55 + i * 0.15);
-        const { data: { text: textoMRZ } } = await w.recognize(recortarInferior(gris, FRACCIONES_MRZ[i]));
-        log(`📄 OCR MRZ (${FRACCIONES_MRZ[i] * 100}% inferior):\n` + textoMRZ);
-        const cand = extraerDesdeMRZ(textoMRZ);
-        if (cand.mrzVerificada || (!mrz.fechaVencimiento && cand.fechaVencimiento)) mrz = cand;
-        if (mrz.mrzVerificada) break;
-      }
-      await w.setParameters(PARAMS_TEXTO);
-    }
-
-    let domicilio = extraerDomicilio(text);
-    let lugar = extraerLugarNacimiento(text);
-    let textoZonas = '';
-    if (!domicilio || !lugar) {
-      await w.setParameters(PARAMS_ZONA);
-      const variantes = [[0.4, true], [0.6, true]];
-      for (let i = 0; i < variantes.length && (!domicilio || !lugar); i++) {
-        const [fr, bin] = variantes[i];
-        etapa(0.7 + i * 0.1, 0.8 + i * 0.1);
-        let zona = recortarSuperior(gris, fr);
-        if (bin) zona = binarizarCanvas(zona);
-        const { data: { text: tz } } = await w.recognize(zona);
-        textoZonas += `\n--- zona ${Math.round(fr * 100)}%${bin ? ' binarizada' : ''} ---\n` + tz;
-        log('📄 OCR zona superior:\n' + tz);
-        domicilio = domicilio || extraerDomicilio(tz);
-        lugar = lugar || extraerLugarNacimiento(tz);
-      }
-      await w.setParameters(PARAMS_TEXTO);
-    }
+    const mrz = extraerDesdeMRZ(textAbajo);
 
     if (progresoCb) progresoCb(1);
 
-    return { raw: text + textoZonas, domicilio, lugarNacimiento: lugar, cuil: extraerCUIL(text, contexto), fechaVencimiento: mrz.fechaVencimiento, nacionalidad: mrz.nacionalidad, mrzVerificada: mrz.mrzVerificada };
+    return {
+      raw: '--- ARRIBA ---\n' + textArriba + '\n--- ABAJO ---\n' + textAbajo,
+      domicilio: extraerDomicilio(textArriba),
+      lugarNacimiento: extraerLugarNacimiento(textArriba),
+      cuil: extraerCUIL(textArriba, contexto),
+      fechaVencimiento: mrz.fechaVencimiento,
+      nacionalidad: mrz.nacionalidad,
+      mrzVerificada: mrz.mrzVerificada
+    };
   }
 
-  return { leer, precargar, liberar, setDebug: (v) => { DEBUG = !!v; }, extraerDomicilio, extraerLugarNacimiento, extraerCUIL, extraerDesdeMRZ, cuilValido, umbralLocal };
+  return { leer, precargar, liberar, setDebug: (v) => { DEBUG = !!v; }, extraerDomicilio, extraerLugarNacimiento, extraerCUIL, extraerDesdeMRZ, cuilValido };
 })();
