@@ -1,4 +1,6 @@
-const CACHE_NAME = 'escaner-dni-v20';
+// Service worker - Escáner de Documentos
+// Subilo al repo con el nombre sw.js. Subí el número de CACHE_NAME en cada cambio grande.
+const CACHE_NAME = 'escaner-dni-v22';
 const ASSETS = [
   './', './index.html', './manifest.json', './css/styles.css',
   './js/validators.js', './js/parsers-mundo.js', './js/parser.js',
@@ -9,21 +11,50 @@ const ASSETS = [
 ];
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(ASSETS).catch(() => {})).then(() => self.skipWaiting()));
+  event.waitUntil(
+    caches.open(CACHE_NAME)
+      // allSettled: si un archivo falla, igual se guardan los demás
+      .then((cache) => Promise.allSettled(ASSETS.map((u) => cache.add(u))))
+      .then(() => self.skipWaiting())
+  );
 });
+
 self.addEventListener('activate', (event) => {
-  event.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== CACHE_NAME).map(k => caches.delete(k)))).then(() => self.clients.claim()));
+  event.waitUntil(
+    caches.keys()
+      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k))))
+      .then(() => self.clients.claim())
+  );
 });
+
+function guardar(request, response) {
+  if (response && response.status === 200) {
+    const copia = response.clone();
+    caches.open(CACHE_NAME).then((c) => c.put(request, copia)).catch(() => {});
+  }
+  return response;
+}
+
 self.addEventListener('fetch', (event) => {
   const { request } = event;
   if (request.method !== 'GET') return;
-  event.respondWith(caches.match(request).then(cached => {
-    if (cached) return cached;
-    return fetch(request).then(response => {
-      if (!response || response.status !== 200) return response;
-      const copy = response.clone();
-      caches.open(CACHE_NAME).then(cache => cache.put(request, copy)).catch(() => {});
-      return response;
-    }).catch(() => caches.match('./index.html'));
-  }));
+  const url = new URL(request.url);
+
+  // Archivos de la app: RED PRIMERO, así cada cambio que subas se ve enseguida.
+  // Sin internet usa la copia guardada.
+  if (url.origin === self.location.origin) {
+    event.respondWith(
+      fetch(request, { cache: 'no-cache' })
+        .then((resp) => guardar(request, resp))
+        .catch(() => caches.match(request).then((c) => c || caches.match('./index.html')))
+    );
+    return;
+  }
+
+  // Librerías externas (jsQR, ZXing, Tesseract): CACHÉ PRIMERO
+  event.respondWith(
+    caches.match(request).then((cached) =>
+      cached || fetch(request).then((resp) => guardar(request, resp)).catch(() => cached)
+    )
+  );
 });
