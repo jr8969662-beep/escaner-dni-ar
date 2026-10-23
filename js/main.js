@@ -1,8 +1,8 @@
 (() => {
   'use strict';
 
-  const SUPABASE_URL = 'https://TU_SUPABASE_URL.supabase.co'; // <-- REEMPLAZAR
-  const SUPABASE_KEY = 'TU_SUPABASE_ANON_KEY'; // <-- REEMPLAZAR
+  const SUPABASE_URL = 'https://TU_SUPABASE_URL.supabase.co'; 
+  const SUPABASE_KEY = 'TU_SUPABASE_ANON_KEY'; 
   let supabaseClient = null;
   if (typeof supabase !== 'undefined') {
     supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
@@ -23,7 +23,8 @@
   const HINT_OK = 'Encajá el reverso del DNI en el marco';
   let monitorLuz = null, ultimoCambioLinterna = 0, noEncenderHasta = 0, linternaManual = false;
 
-  function log(msg) { if (DEBUG) console.log(msg); }
+  let modoReversoNuevo = false;
+  let ultimaIdentidad = null;
 
   // DOM
   const video = document.getElementById('scan-video');
@@ -98,6 +99,41 @@
   let autoScanActivo = false, autoScanProcesando = false;
 
   const BANDERAS = { arg: '🇦🇷', chl: '🇨🇱', ury: '🇺🇾', pry: '🇵🇾', per: '🇵🇪', bol: '🇧🇴', col: '🇨🇴', ecu: '🇪🇨', ven: '🇻🇪', bra: '🇧🇷' };
+
+  function datosDesdeIdentidad(id) {
+    const apellido = id.apellido || '', nombre = id.nombre || '';
+    const hoy = new Date();
+    let edad = null;
+    if (id.fechaNacimiento) {
+      const [y, m, d] = id.fechaNacimiento.split('-').map(Number);
+      edad = hoy.getFullYear() - y - ((hoy.getMonth() + 1 < m || (hoy.getMonth() + 1 === m && hoy.getDate() < d)) ? 1 : 0);
+    }
+    return {
+      pais: 'ARG', paisNombre: 'Argentina', metodo: 'mrz', tipoDocumento: 'DNI (lectura del reverso)',
+      dni: id.dni, numero: id.dni, numeroValido: /^\d{7,8}$/.test(id.dni || ''),
+      apellido, nombre, nombreCompleto: `${apellido} ${nombre}`.trim(),
+      sexo: id.sexo, fechaNacimiento: id.fechaNacimiento, edad,
+      nacionalidad: id.nacionalidad, fechaVencimiento: id.fechaVencimiento,
+      vigente: id.fechaVencimiento ? new Date(id.fechaVencimiento + 'T23:59:59') >= hoy : null,
+      mrzVerificada: !!id.verificada, nombreTruncado: !!id.truncado
+    };
+  }
+
+  function inyectarBotonDNINuevo() {
+    const cont = document.querySelector('.camera-actions');
+    if (!cont || document.getElementById('btn-dni-nuevo')) return;
+    const b = document.createElement('button');
+    b.type = 'button'; b.id = 'btn-dni-nuevo'; b.className = 'btn btn-secondary';
+    b.innerHTML = '<span>DNI nuevo: leer reverso</span>';
+    b.addEventListener('click', abrirReversoDNINuevo);
+    cont.appendChild(b);
+  }
+
+  async function abrirReversoDNINuevo() {
+    detenerCamara();
+    modoReversoNuevo = true;
+    await abrirModalDomicilio();
+  }
 
   function setStatus(texto, tipo = 'idle') {
     if (statusText) statusText.textContent = texto;
@@ -303,19 +339,25 @@
   function iniciarEscaneoContinuo() {
     if (stopScan) stopScan(); if (escaneoEstado) escaneoEstado.textContent = '🔍 Buscando código…'; setEstadoMarco('buscando');
     
-    stopScan = DNIScanner.escanearContinuo(video, canvas, (texto) => exitoEscaneo(texto), () => { if (escaneoEstado) escaneoEstado.textContent = '⏱ No se detectó. Acercate más.'; setEstadoMarco('error'); setStatus('Sin detección'); }, { intervaloMs: 300, timeoutMs: 20000, anchoMax: 1280, usarROI: true, framesConfirmacion: 2, onBrillo: (brillo) => evaluarAutoFlash(brillo) });
+    stopScan = DNIScanner.escanearContinuo(
+      video, canvas, 
+      (texto) => exitoEscaneo(texto), 
+      () => { 
+        if (escaneoEstado) escaneoEstado.textContent = '⏱ No se detectó. ¿Es un DNI nuevo? Usá “DNI nuevo: leer reverso”.'; 
+        setEstadoMarco('error'); 
+        setStatus('Sin detección'); 
+      }, 
+      { intervaloMs: 300, timeoutMs: 20000, anchoMax: 1280, usarROI: true, framesConfirmacion: 2, onBrillo: (brillo) => evaluarAutoFlash(brillo) }
+    );
   }
 
   function esc(s) {
-    return String(s == null ? '' : s).replace(/[&<>"']/g, c =>
-      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   }
 
   function parsearSeguro(texto) {
     try {
-      return paisSeleccionado === 'arg'
-        ? DNIParser.parsear(texto)
-        : ParsersMundo.parsear(paisSeleccionado, texto);
+      return paisSeleccionado === 'arg' ? DNIParser.parsear(texto) : ParsersMundo.parsear(paisSeleccionado, texto);
     } catch (e) { return null; }
   }
 
@@ -356,60 +398,33 @@
   }
 
   async function exitoEscaneo(texto) {
-    if (stopScan) { stopScan(); stopScan = null; } 
-    if (cameraHint) cameraHint.style.opacity = '0'; 
-    setEstadoMarco('ok'); 
-    animarCaptura();
+    if (stopScan) { stopScan(); stopScan = null; } if (cameraHint) cameraHint.style.opacity = '0'; setEstadoMarco('ok'); animarCaptura();
+    if (flashEncendido && trackActual) { trackActual.applyConstraints({ advanced: [{ torch: false }] }).catch(() => {}); flashEncendido = false; autoFlashActivo = false; if (btnFlash) btnFlash.classList.remove('encendido'); }
     
-    if (flashEncendido && trackActual) { 
-      trackActual.applyConstraints({ advanced: [{ torch: false }] }).catch(() => {}); 
-      flashEncendido = false; autoFlashActivo = false; 
-      if (btnFlash) btnFlash.classList.remove('encendido'); 
-    }
-    
-    let mejorCanvas = null;
-    let mejorScore = -1;
-    
+    let mejorCanvas = null, mejorScore = -1;
     for (let i = 0; i < 3; i++) {
       const c = document.createElement('canvas');
-      c.width = video.videoWidth;
-      c.height = video.videoHeight;
+      c.width = video.videoWidth; c.height = video.videoHeight;
       c.getContext('2d').drawImage(video, 0, 0, c.width, c.height);
       const score = nitidez(c);
-      if (score > mejorScore) {
-        mejorScore = score;
-        mejorCanvas = c;
-      }
+      if (score > mejorScore) { mejorScore = score; mejorCanvas = c; }
       await new Promise(r => setTimeout(r, 50)); 
     }
 
     const dataUrl = mejorCanvas ? mejorCanvas.toDataURL('image/jpeg', 0.8) : canvas.toDataURL('image/jpeg', 0.8);
     ultimaFotoDataUrl = dataUrl;
+    if (img) { img.src = dataUrl; img.hidden = false; } video.hidden = true;
+    if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; } trackActual = null; if (zoomControl) zoomControl.hidden = true;
+    await new Promise(r => setTimeout(r, 250)); if (scanFrame) scanFrame.classList.remove('activo');
     
-    if (img) { img.src = dataUrl; img.hidden = false; } 
-    video.hidden = true;
-    if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; } 
-    trackActual = null; 
-    if (zoomControl) zoomControl.hidden = true;
-    
-    await new Promise(r => setTimeout(r, 250)); 
-    if (scanFrame) scanFrame.classList.remove('activo');
-    
-    const paisDelDocumento = detectarPaisDelTexto(texto); 
-    const paisElegidoNombre = nombrePaisDesdeCodigo(paisSeleccionado);
+    const paisDelDocumento = detectarPaisDelTexto(texto); const paisElegidoNombre = nombrePaisDesdeCodigo(paisSeleccionado);
     
     if (paisDelDocumento && paisDelDocumento !== paisSeleccionado) {
-      const nd = nombrePaisDesdeCodigo(paisDelDocumento); 
-      setEstadoMarco('error');
+      const nd = nombrePaisDesdeCodigo(paisDelDocumento); setEstadoMarco('error');
       mostrarErrorDocumento('Documento incorrecto', `Elegiste <strong>${paisElegidoNombre}</strong> pero este documento parece ser de <strong>${nd}</strong>.<br><br>Cambiá el país en el selector de arriba y volvé a escanear.`);
       if (estado) { estado.textContent = `⚠️ Este documento es de ${nd}`; estado.classList.add('error'); estado.classList.remove('ok'); }
-      if (escaneoEstado) escaneoEstado.textContent = ''; 
-      setStatus('Documento incorrecto', 'error'); 
-      if (btnRepetir) btnRepetir.hidden = false;
-      destacarChipPais(paisDelDocumento); 
-      reproducirSonidoError(); 
-      vibrarError(); 
-      return;
+      if (escaneoEstado) escaneoEstado.textContent = ''; setStatus('Documento incorrecto', 'error'); if (btnRepetir) btnRepetir.hidden = false;
+      destacarChipPais(paisDelDocumento); reproducirSonidoError(); vibrarError(); return;
     }
     
     const datos = parsearSeguro(texto);
@@ -417,23 +432,12 @@
     if (!datos || (!datos.dni && !datos.numero && !datos.apellido && !datos.nombre)) {
       setEstadoMarco('error');
       if (paisDelDocumento) { const nd = nombrePaisDesdeCodigo(paisDelDocumento); mostrarErrorDocumento('Documento no reconocido', `No pudimos leer este documento como uno de ${paisElegidoNombre}. Parece ser de ${nd}.`); }
-      else { mostrarErrorDocumento('Documento no reconocido', `No pudimos interpretar este código como un documento de ${paisElegidoNombre}.`); }
+      else { mostrarErrorDocumento('Documento no reconocido', `No pudimos interpretar este código como un documento de ${paisElegidoNombre}.<br><br>Si es un <strong>DNI nuevo</strong> (con chip), tocá <strong>“DNI nuevo: leer reverso”</strong>.`); }
       if (estado) { estado.textContent = '⚠️ No se pudieron extraer datos'; estado.classList.add('error'); estado.classList.remove('ok'); }
-      if (escaneoEstado) escaneoEstado.textContent = 'Texto: ' + texto.substring(0, 60); 
-      setStatus('Sin datos', 'error'); 
-      if (btnRepetir) btnRepetir.hidden = false; 
-      reproducirSonidoError(); 
-      vibrarError(); 
-      return;
+      if (escaneoEstado) escaneoEstado.textContent = 'Texto: ' + texto.substring(0, 60); setStatus('Sin datos', 'error'); if (btnRepetir) btnRepetir.hidden = false; reproducirSonidoError(); vibrarError(); return;
     }
-    
-    render(datos); 
-    if (estado) { estado.textContent = '✓ ' + (datos.nombreCompleto || datos.dni || datos.numero || 'Documento'); estado.classList.remove('error'); estado.classList.add('ok'); }
-    if (escaneoEstado) escaneoEstado.textContent = '✅ Escaneo OK'; 
-    setStatus('Escaneo OK', 'active'); 
-    if (btnRepetir) btnRepetir.hidden = false; 
-    reproducirSonidoExito(); 
-    vibrarExito();
+    render(datos); if (estado) { estado.textContent = '✓ ' + (datos.nombreCompleto || datos.dni || datos.numero || 'Documento'); estado.classList.remove('error'); estado.classList.add('ok'); }
+    if (escaneoEstado) escaneoEstado.textContent = '✅ Escaneo OK'; setStatus('Escaneo OK', 'active'); if (btnRepetir) btnRepetir.hidden = false; reproducirSonidoExito(); vibrarExito();
   }
 
   function setTexto(id, valor) { const el = document.getElementById(id); if (!el) return; el.textContent = (valor === null || valor === undefined || valor === '') ? '—' : String(valor); el.classList.remove('ok', 'err'); }
@@ -550,6 +554,9 @@
     });
   }
 
+  // ==========================================
+  // LÓGICA DEL REVERSO (NUEVA)
+  // ==========================================
   async function activarLinternaReverso() { if (!domicilioTrack || !domicilioFlashSoportado) return; try { await domicilioTrack.applyConstraints({ advanced: [{ torch: true }] }); domicilioFlashEncendido = true; if (domicilioFlashBtn) domicilioFlashBtn.classList.add('encendido'); } catch (e) {} }
   async function apagarLinternaReverso() { if (!domicilioTrack || !domicilioFlashEncendido) return; try { await domicilioTrack.applyConstraints({ advanced: [{ torch: false }] }); domicilioFlashEncendido = false; if (domicilioFlashBtn) domicilioFlashBtn.classList.remove('encendido'); } catch (e) {} }
   async function toggleLinternaReverso() { if (!domicilioTrack || !domicilioFlashSoportado) return; if (domicilioFlashEncendido) await apagarLinternaReverso(); else await activarLinternaReverso(); }
@@ -669,7 +676,7 @@
   }
 
   async function abrirModalDomicilio() {
-    if (!ultimoResultado) { mostrarToast('Primero escaneá el frente', 'error'); return; }
+    if (!ultimoResultado && !modoReversoNuevo) { mostrarToast('Primero escaneá el frente', 'error'); return; }
     if (typeof DomicilioOCR !== 'undefined' && DomicilioOCR.precargar) { DomicilioOCR.precargar().catch(console.warn); }
     if (modalDomicilio) modalDomicilio.hidden = false; if (domicilioPreview) domicilioPreview.hidden = true; if (domicilioResultado) domicilioResultado.hidden = true; if (domicilioProgress) domicilioProgress.hidden = true;
     if (btnCapturarDomicilio) btnCapturarDomicilio.hidden = false; if (btnReintentarDomicilio) btnReintentarDomicilio.hidden = true; if (btnGuardarDomicilio) btnGuardarDomicilio.hidden = true;
@@ -688,6 +695,8 @@
     detenerMonitorLuz(); ocultarMarcoDomicilio(); autoScanActivo = false; autoScanProcesando = false;
     await apagarLinternaReverso(); if (domicilioStream) { domicilioStream.getTracks().forEach(t => t.stop()); domicilioStream = null; } if (domicilioVideo) domicilioVideo.srcObject = null;
     if (modalDomicilio) modalDomicilio.hidden = true; domicilioTrack = null; domicilioFlashSoportado = false; domicilioFlashEncendido = false; if (domicilioFlashBtn) domicilioFlashBtn.classList.remove('encendido');
+    if (modoReversoNuevo && !ultimoResultado && btnCamara) btnCamara.hidden = false;
+    modoReversoNuevo = false;
   }
 
   async function esperarVideoDomicilio(ms = 3000) {
@@ -696,42 +705,96 @@
   }
 
   async function iniciarAutoScanDomicilio() {
+    const MAX_INTENTOS = 3;
     autoScanActivo = true; autoScanProcesando = true;
     if (btnCapturarDomicilio) btnCapturarDomicilio.hidden = true; if (domicilioProgress) domicilioProgress.hidden = false;
-    if (domicilioProgressText) domicilioProgressText.textContent = 'Leyendo el reverso...'; if (domicilioProgressFill) domicilioProgressFill.style.width = '0%';
 
-    const contexto = { dni: ultimoResultado && (ultimoResultado.dni || ultimoResultado.numero) };
-    if (!(await esperarVideoDomicilio())) { autoScanActivo = autoScanProcesando = false; if (domicilioProgress) domicilioProgress.hidden = true; if (btnCapturarDomicilio) btnCapturarDomicilio.hidden = false; return; }
+    const campos = ['domicilio', 'lugarNacimiento', 'cuil', 'fechaVencimiento', 'nacionalidad'];
+    const acum = {};
+    let raw = '', mrzOk = null, mejorCanvas = null, ident = null;
+    const completo = () => modoReversoNuevo
+      ? (ident && ident.dni && ident.apellido && acum.domicilio && acum.cuil)
+      : (acum.domicilio && acum.cuil && acum.fechaVencimiento);
 
-    try {
-      const c = await capturarMasNitidoRecortado(1, 0);
-      const res = await DomicilioOCR.leer(c, paisSeleccionado, (p) => { if (domicilioProgressFill) domicilioProgressFill.style.width = (p * 100) + '%'; }, contexto);
-      if (!autoScanActivo) return; autoScanActivo = false;
-
-      if (!res.domicilio && !res.cuil && !res.fechaVencimiento && !res.lugarNacimiento) {
-        if (domicilioProgress) domicilioProgress.hidden = true; if (btnCapturarDomicilio) btnCapturarDomicilio.hidden = false;
-        mostrarToast('No se pudo leer. Acomodá el DNI y tocá "Capturar y leer".', 'error'); return;
-      }
-
-      detenerCamaraModal();
-      if (domicilioPreview && c) { domicilioPreview.src = c.toDataURL('image/jpeg', 0.7); domicilioPreview.hidden = false; }
-      if (domicilioVideo) domicilioVideo.hidden = true;
-      if (domInputDomicilio) domInputDomicilio.value = res.domicilio || '';
-      if (domInputNacimiento) domInputNacimiento.value = res.lugarNacimiento || '';
-      if (domInputCuil) domInputCuil.value = res.cuil || '';
-      if (domInputVencimiento) domInputVencimiento.value = res.fechaVencimiento || '';
-      if (domInputNacionalidad) domInputNacionalidad.value = res.nacionalidad || '';
-      if (domicilioProgress) domicilioProgress.hidden = true; if (domicilioResultado) domicilioResultado.hidden = false;
-      if (btnGuardarDomicilio) btnGuardarDomicilio.hidden = false; if (btnReintentarDomicilio) btnReintentarDomicilio.hidden = false;
-
-      if (!res.domicilio) mostrarToast('No se leyó el domicilio: escribilo a mano.', 'error');
-      else if (res.fechaVencimiento && res.mrzVerificada === false) mostrarToast('✓ Detectado · revisá el vencimiento', 'error');
-      else mostrarToast('✓ Datos detectados', 'success');
-    } catch (e) {
-      autoScanActivo = false; autoScanProcesando = false;
+    if (!(await esperarVideoDomicilio())) {
+      autoScanActivo = autoScanProcesando = false;
       if (domicilioProgress) domicilioProgress.hidden = true; if (btnCapturarDomicilio) btnCapturarDomicilio.hidden = false;
-      mostrarToast('Error al procesar. Usá el botón manual.', 'error');
+      return;
     }
+    if (typeof subirResolucion === 'function') await subirResolucion();
+    const capturar = () => (typeof capturarMasNitidoRecortado === 'function') ? capturarMasNitidoRecortado(2, 100) : capturarMasNitido(domicilioVideo, 2, 100);
+
+    for (let intento = 1; intento <= MAX_INTENTOS && autoScanActivo && !completo(); intento++) {
+      if (domicilioProgressText) domicilioProgressText.textContent = `Leyendo el reverso… (${intento}/${MAX_INTENTOS})`;
+      if (domicilioProgressFill) domicilioProgressFill.style.width = '0%';
+      const c = await capturar();
+      mejorCanvas = mejorCanvas || c;
+      try {
+        const contexto = { dni: (ultimoResultado && (ultimoResultado.dni || ultimoResultado.numero)) || (ident && ident.dni) };
+        const res = await DomicilioOCR.leer(c, paisSeleccionado, (p) => {
+          if (domicilioProgressFill) domicilioProgressFill.style.width = (p * 100) + '%';
+        }, contexto);
+        if (!autoScanActivo) break;
+
+        let nuevo = false;
+        ['domicilio', 'lugarNacimiento', 'cuil'].forEach(k => { if (!acum[k] && res[k]) { acum[k] = res[k]; nuevo = true; } });
+        if (res.fechaVencimiento && (res.mrzVerificada || !acum.fechaVencimiento)) {
+          acum.fechaVencimiento = res.fechaVencimiento; acum.nacionalidad = res.nacionalidad;
+          mrzOk = res.mrzVerificada === true; nuevo = true;
+        }
+        const mejor = DomicilioOCR.mejorIdentidad(ident, res.identidad);
+        if (mejor !== ident) { ident = mejor; nuevo = true; }
+        if (nuevo) mejorCanvas = c;
+        raw += `\n===== intento ${intento} =====\n` + (res.raw || '');
+      } catch (e) {
+        console.warn('OCR reverso:', e);
+      }
+    }
+
+    autoScanProcesando = false;
+    if (!autoScanActivo) return;
+    autoScanActivo = false;
+
+    const hayIdentidad = modoReversoNuevo && ident && (ident.dni || ident.apellido);
+    if (!hayIdentidad && !campos.some(k => acum[k])) {
+      if (domicilioProgress) domicilioProgress.hidden = true;
+      if (btnCapturarDomicilio) btnCapturarDomicilio.hidden = false;
+      mostrarToast('No se pudo leer. Acomodá el DNI y tocá "Capturar y leer".', 'error');
+      return;
+    }
+
+    ultimaIdentidad = hayIdentidad ? ident : null;
+    detenerCamaraModal();
+    if (domicilioPreview && mejorCanvas) { domicilioPreview.src = mejorCanvas.toDataURL('image/jpeg', 0.7); domicilioPreview.hidden = false; }
+    if (domicilioVideo) domicilioVideo.hidden = true;
+    if (domInputDomicilio) domInputDomicilio.value = acum.domicilio || '';
+    if (domInputNacimiento) domInputNacimiento.value = acum.lugarNacimiento || '';
+    if (domInputCuil) domInputCuil.value = acum.cuil || '';
+    if (domInputVencimiento) domInputVencimiento.value = acum.fechaVencimiento || (ident && ident.fechaVencimiento) || '';
+    if (domInputNacionalidad) domInputNacionalidad.value = acum.nacionalidad || (ident && ident.nacionalidad) || '';
+    if (domicilioProgress) domicilioProgress.hidden = true; if (domicilioResultado) domicilioResultado.hidden = false;
+    if (btnGuardarDomicilio) btnGuardarDomicilio.hidden = false; if (btnReintentarDomicilio) btnReintentarDomicilio.hidden = false;
+    
+    mostrarDebugOCR(raw);
+    const info = document.querySelector('.domicilio-info');
+    if (info && hayIdentidad) {
+      info.textContent = `${ident.apellido || '?'} ${ident.nombre || ''} · DNI ${ident.dni || '?'} · ${ident.verificada ? '✓ MRZ verificada' : '⚠ revisá los datos'}${ident.truncado ? ' · nombre cortado por la MRZ' : ''}`;
+    }
+
+    if (modoReversoNuevo && !(ident && ident.dni && ident.apellido)) mostrarToast('No se leyeron bien las líneas con < : probá de nuevo con más luz.', 'error');
+    else if (!acum.domicilio) mostrarToast('No se leyó el domicilio: escribilo a mano o tocá Reintentar.', 'error');
+    else if (acum.fechaVencimiento && mrzOk === false) mostrarToast('✓ Detectado · revisá el vencimiento', 'error');
+    else mostrarToast('✓ Datos detectados', 'success');
+  }
+
+  function mostrarDebugOCR(raw) {
+    let pre = document.getElementById('dom-debug-pre');
+    if (!pre && domicilioResultado) {
+      const det = document.createElement('details'); det.className = 'raw-data';
+      det.innerHTML = '<summary>Ver texto leído por el OCR</summary><pre id="dom-debug-pre"></pre>';
+      domicilioResultado.appendChild(det); pre = det.querySelector('pre');
+    }
+    if (pre) pre.textContent = raw || '';
   }
 
   function detenerCamaraModal() {
@@ -747,7 +810,9 @@
   }
   
   function guardarDomicilioDesdeModal() {
+    if (!ultimoResultado && ultimaIdentidad) ultimoResultado = datosDesdeIdentidad(ultimaIdentidad);
     if (!ultimoResultado) return;
+    
     const val = (el) => ((el && el.value) || '').trim();
     const domicilio = val(domInputDomicilio), nacimiento = val(domInputNacimiento), cuil = val(domInputCuil), vencISO = aISO(val(domInputVencimiento)), nacionalidad = val(domInputNacionalidad);
     const usaBarras = /\//.test(ultimoResultado.fechaNacimiento || ''); const fmt = (iso) => (usaBarras ? iso.split('-').reverse().join('/') : iso);
@@ -755,7 +820,14 @@
     const poner = (campo, valor, siempre) => { if (!valor || ultimoResultado[campo] === valor) return; if (siempre || !ultimoResultado[campo] || origen[campo]) { ultimoResultado[campo] = valor; origen[campo] = true; actualizados++; } };
     poner('domicilio', domicilio, true); poner('lugarNacimiento', nacimiento, true); poner('cuil', cuil); poner('nacionalidad', nacionalidad);
     if (vencISO) { poner('fechaVencimiento', fmt(vencISO)); if (ultimoResultado.fechaVencimiento === fmt(vencISO)) { ultimoResultado.vigente = new Date(vencISO + 'T23:59:59') >= new Date(); } }
-    render(ultimoResultado); mostrarToast(actualizados > 0 ? `✓ ${actualizados} campo(s) agregado(s)` : 'No había campos nuevos para agregar', 'success'); cerrarModalDomicilio();
+    
+    render(ultimoResultado); 
+    if (modoReversoNuevo) {
+      if (estado) { estado.textContent = '✓ ' + (ultimoResultado.nombreCompleto || 'Documento'); estado.classList.remove('error'); estado.classList.add('ok'); }
+      if (btnRepetir) btnRepetir.hidden = false;
+    }
+    mostrarToast(actualizados > 0 ? `✓ ${actualizados} campo(s) agregado(s)` : 'Datos cargados', 'success'); 
+    cerrarModalDomicilio();
   }
 
   if (btnCamara) btnCamara.addEventListener('click', iniciarCamara);
@@ -786,6 +858,7 @@
   inicializarTema();
   actualizarContadorHistorial();
   inicializarSelectorPais();
+  inyectarBotonDNINuevo();
 
   setTimeout(iniciarCamara, 300);
 })();
