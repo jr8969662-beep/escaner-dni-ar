@@ -78,7 +78,7 @@ const FrenteDNI = (() => {
     if (fin < 0) fin = Math.min(lineas.length, ini + 8);
     const lblNombre = plano.findIndex((l, i) => i > ini && i < fin && /\bNOMBRE\b|\bNAME\b|MBRE\/|\/NAME/.test(l));
     const tomar = (a, b) => { const r = []; for (let i = a; i < b; i++) { const n = comoNombre(lineas[i]); if (n) r.push(n); } return r; };
-    // valor en la misma línea de la etiqueta ("Apellido/Surname SANCHEZ")
+    // valor en la misma línea de la etiqueta ("Apellido/Surname PEREZ")
     const resto = (i) => { const m = /(?:SURNAME|APELLIDOS?)\s*[:\/]?\s*(.*)$/i.exec(lineas[i]); return m ? comoNombre(m[1].replace(/^\/?\s*SURNAME\s*/i, '')) : null; };
     let ape, nom;
     if (lblNombre > 0) {
