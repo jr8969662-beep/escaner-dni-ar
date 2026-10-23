@@ -92,6 +92,40 @@ const DomicilioOCR = (() => {
     return textos;
   }
 
+  // FRENTE del DNI nuevo: la imagen debe ser la tarjeta (recortada al marco). Pasadas: párrafo, texto disperso y dos zonas
+  // ampliadas (nombres; documento + fechas). Devuelve los textos para que FrenteDNI decida cada dato por votación.
+  async function leerFrente(fuente, onProgress) {
+    progresoCb = typeof onProgress === 'function' ? onProgress : null;
+    const w = await initWorker();
+    const gris = preprocesar(await aElemento(fuente));
+    const zona = (x0, y0, x1, y1, esc) => {
+      const sx = Math.round(gris.width * x0), sy = Math.round(gris.height * y0);
+      const sw = Math.round(gris.width * (x1 - x0)), sh = Math.round(gris.height * (y1 - y0));
+      const c = document.createElement('canvas');
+      c.width = Math.round(sw * esc); c.height = Math.round(sh * esc);
+      const x = c.getContext('2d'); x.imageSmoothingQuality = 'high';
+      x.drawImage(gris, sx, sy, sw, sh, 0, 0, c.width, c.height);
+      return c;
+    };
+    const pasadas = [
+      { img: gris, psm: '6' },
+      { img: gris, psm: '11' },
+      { img: zona(0.32, 0.15, 0.86, 0.43, 2), psm: '6' },
+      { img: zona(0.32, 0.42, 0.96, 0.82, 2), psm: '6' }
+    ];
+    const textos = [];
+    for (let i = 0; i < pasadas.length; i++) {
+      etapa(i / pasadas.length, (i + 1) / pasadas.length);
+      await w.setParameters({ tessedit_char_whitelist: '', preserve_interword_spaces: '1', tessedit_pageseg_mode: pasadas[i].psm });
+      const { data: { text } } = await w.recognize(pasadas[i].img);
+      textos.push(text);
+      log('📄 OCR frente pasada ' + (i + 1) + ':\n' + text);
+    }
+    await w.setParameters(PARAMS_TEXTO);
+    if (progresoCb) progresoCb(1);
+    return textos;
+  }
+
   async function liberar() {
     if (!workerPromise) return;
     const p = workerPromise;
@@ -542,6 +576,7 @@ const DomicilioOCR = (() => {
   return {
     leer,
     leerTexto,
+    leerFrente,
     precargar,
     liberar,
     setDebug: (v) => { DEBUG = !!v; },

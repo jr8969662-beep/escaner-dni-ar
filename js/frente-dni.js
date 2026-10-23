@@ -12,6 +12,29 @@ const FrenteDNI = (() => {
   const limpiar = (s) => String(s || '').replace(/\s+/g, ' ').trim();
   const sinTildes = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '');
 
+  // Corrige confusiones típicas del OCR dentro de un nombre (0→O, 1→I, 5→S, 8→B, 6→G) y saca símbolos sueltos
+  function normalizarNombre(n) {
+    if (!n) return null;
+    const t = String(n).toUpperCase().replace(/[0]/g, 'O').replace(/[1|!]/g, 'I').replace(/5/g, 'S').replace(/8/g, 'B').replace(/6/g, 'G')
+      .replace(/[^A-ZÁÉÍÓÚÜÑ '\-]/g, ' ').replace(/\s+/g, ' ').replace(/(^| )[-']+|[-']+( |$)/g, ' ').trim();
+    return t.length >= 2 ? t : null;
+  }
+  function distancia(a, b) {
+    const m = a.length, n = b.length; if (!m) return n; if (!n) return m;
+    let prev = Array.from({ length: n + 1 }, (_, j) => j);
+    for (let i = 1; i <= m; i++) {
+      const cur = [i];
+      for (let j = 1; j <= n; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      prev = cur;
+    }
+    return prev[n];
+  }
+  function similitud(a, b) {
+    a = sinTildes(a || '').toUpperCase().replace(/[^A-Z]/g, ''); b = sinTildes(b || '').toUpperCase().replace(/[^A-Z]/g, '');
+    if (!a || !b) return 0;
+    return 1 - distancia(a, b) / Math.max(a.length, b.length);
+  }
+
   function fechaValida(d, m, y) {
     if (y < 1900 || y > 2100 || m < 1 || m > 12 || d < 1 || d > 31) return null;
     const t = new Date(y, m - 1, d);
@@ -62,6 +85,8 @@ const FrenteDNI = (() => {
   const PALABRAS_ETIQUETA = /(SEXO|SEX|NACIONAL|NATIONAL|DOCUMENT|APELLID|SURNAME|NOMBRE|NAME|FECHA|DATE|EJEMPLAR|BIRTH|ISSUE|EXPIR|REPUBLICA|MERCOSUR|REGISTRO|MINISTERIO|IDENTIDAD)/;
 
   function comoNombre(linea) {
+    const letras = (linea.match(/[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]/g) || []).length, digitos = (linea.match(/\d/g) || []).length;
+    if (letras >= 4 && digitos > 0 && digitos <= 2) linea = linea.replace(/0/g, 'O').replace(/1/g, 'I').replace(/5/g, 'S').replace(/8/g, 'B').replace(/6/g, 'G');
     const t = limpiar(linea.replace(/^[^A-Za-zÁÉÍÓÚÜÑáéíóúüñ]+|[^A-Za-zÁÉÍÓÚÜÑáéíóúüñ]+$/g, ''));
     if (!t || /[a-záéíóúüñ]/.test(t)) return null;            // los nombres vienen en mayúsculas; el ruido suele traer minúsculas
     if (!/^[A-ZÁÉÍÓÚÜÑ]+(?: [A-ZÁÉÍÓÚÜÑ]+)*$/.test(t)) return null;
@@ -73,7 +98,14 @@ const FrenteDNI = (() => {
   function buscarNombres(lineas) {
     const plano = lineas.map((l) => sinTildes(l).toUpperCase());
     const ini = plano.findIndex((l) => /SURNAME|URNAME|APELLID|PELLIDO/.test(l));
-    if (ini < 0) return { apellido: null, nombre: null };
+    if (ini < 0) {
+      // sin etiqueta: líneas en mayúsculas entre el encabezado "IDENTIDAD" y la fila de Sexo/Nacionalidad
+      const cab = plano.findIndex((l) => /IDENTIDAD/.test(l));
+      const sx = plano.findIndex((l, i) => i > cab && /\bSEXO\b|\bSEX\b|NACIONAL|NATIONAL/.test(l));
+      if (cab < 0 || sx < 0) return { apellido: null, nombre: null };
+      const c = []; for (let i = cab + 1; i < sx; i++) { const n = comoNombre(lineas[i]); if (n) c.push(n); }
+      return { apellido: c[0] || null, nombre: c.slice(1).join(' ') || null };
+    }
     let fin = plano.findIndex((l, i) => i > ini && /\bSEXO\b|\bSEX\b|NACIONAL|NATIONAL|NACIMIENTO|BIRTH/.test(l));
     if (fin < 0) fin = Math.min(lineas.length, ini + 8);
     const lblNombre = plano.findIndex((l, i) => i > ini && i < fin && /\bNOMBRE\b|\bNAME\b|MBRE\/|\/NAME/.test(l));
@@ -120,22 +152,62 @@ const FrenteDNI = (() => {
     const sn = buscarSexoNacionalidad(lineas);
     const ej = /EJEMPLAR\s*[:\-]?\s*([A-Z])\b/.exec(plano);
     const r = {
-      dni: buscarDNI(lineas), apellido: n.apellido, nombre: n.nombre, sexo: sn.sexo, nacionalidad: sn.nac,
+      dni: buscarDNI(lineas), apellido: normalizarNombre(n.apellido), nombre: normalizarNombre(n.nombre), sexo: sn.sexo, nacionalidad: sn.nac,
       fechaNacimiento: f.nac, fechaEmision: f.emi, fechaVencimiento: f.ven, ejemplar: ej ? ej[1] : null
     };
     return Object.keys(r).filter((k) => r[k]).length >= 3 ? r : null;
   }
 
-  // Combina varias lecturas OCR: toma la más completa y rellena lo que le falte con las demás
+  // Combina varias lecturas OCR: cada dato se decide por votación entre las lecturas (gana el que más se repite)
   function parsearVarios(textos) {
     const rs = (textos || []).map(parsear).filter(Boolean);
     if (!rs.length) return null;
     const cuenta = (r) => Object.keys(r).filter((k) => r[k]).length;
     rs.sort((a, b) => cuenta(b) - cuenta(a));
-    const base = Object.assign({}, rs[0]);
-    rs.slice(1).forEach((r) => Object.keys(r).forEach((k) => { if (!base[k] && r[k]) base[k] = r[k]; }));
-    return base;
+    const out = {};
+    Object.keys(rs[0]).concat(['dni', 'apellido', 'nombre', 'sexo', 'nacionalidad', 'fechaNacimiento', 'fechaEmision', 'fechaVencimiento', 'ejemplar']).forEach((k) => {
+      if (k in out) return;
+      const c = new Map();
+      rs.forEach((r, i) => { if (r[k]) { const e = c.get(r[k]) || { n: 0, i }; e.n++; c.set(r[k], e); } });
+      let mejor = null, mv = null;
+      c.forEach((e, v) => { if (!mejor || e.n > mejor.n || (e.n === mejor.n && (String(v).length > String(mv).length))) { mejor = e; mv = v; } });
+      out[k] = mv;
+    });
+    return Object.keys(out).filter((k) => out[k]).length >= 3 ? out : null;
   }
 
-  return { parsear, parsearVarios };
+  // Cruza lo leído por OCR (frente) con una fuente más confiable (QR o MRZ con dígitos de control).
+  // Corrige errores de OCR cuando las lecturas se parecen y avisa cuando no coinciden. Devuelve la lista de avisos.
+  function reconciliar(datos, ident) {
+    const avisos = [];
+    if (!datos || !ident) return avisos;
+    if (ident.dni && datos.dni && ident.dni !== datos.dni) {
+      if (similitud(ident.dni, datos.dni) >= 0.75) { datos.dni = ident.dni; datos.numero = ident.dni; }
+      else { avisos.push('El DNI del frente no coincide con el del reverso: ¿son del mismo documento?'); return avisos; }
+    }
+    if (!datos.dni && ident.dni) { datos.dni = ident.dni; datos.numero = ident.dni; }
+    const nombreCompleto = () => { datos.nombreCompleto = ((datos.apellido || '') + ' ' + (datos.nombre || '')).trim(); };
+    const cruzar = (campo, truncable) => {
+      const ref = ident[campo], act = datos[campo];
+      if (!ref) return;
+      if (!act) { datos[campo] = ref; return; }
+      if (truncable && ident.truncado && sinTildes(act).toUpperCase().startsWith(sinTildes(ref).toUpperCase())) return; // MRZ cortada: vale el más largo
+      if (similitud(ref, act) >= 0.8) datos[campo] = ref;
+      else avisos.push('El ' + campo + ' del frente (' + act + ') no coincide con el del reverso (' + ref + '): revisalo.');
+    };
+    cruzar('apellido', true); cruzar('nombre', true); nombreCompleto();
+    if (ident.fechaNacimiento) {
+      if (datos.fechaNacimiento && datos.fechaNacimiento !== ident.fechaNacimiento) avisos.push('La fecha de nacimiento del frente no coincide con el reverso: se usó la del reverso.');
+      datos.fechaNacimiento = ident.fechaNacimiento;
+    }
+    if (ident.verificada && ident.fechaVencimiento) {
+      if (datos.fechaVencimiento && datos.fechaVencimiento !== ident.fechaVencimiento) avisos.push('El vencimiento del frente no coincide con el reverso: se usó el del reverso.');
+      datos.fechaVencimiento = ident.fechaVencimiento;
+      datos.vigente = new Date(ident.fechaVencimiento + 'T23:59:59') >= new Date();
+    }
+    if (!datos.sexo && ident.sexo) datos.sexo = ident.sexo;
+    return avisos;
+  }
+
+  return { parsear, parsearVarios, reconciliar, similitud, normalizarNombre };
 })();

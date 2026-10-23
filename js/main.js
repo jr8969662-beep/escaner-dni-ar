@@ -962,6 +962,10 @@
   function guardarDomicilioDesdeModal() {
     if (!ultimoResultado && ultimaIdentidad) ultimoResultado = datosDesdeIdentidad(ultimaIdentidad);
     if (!ultimoResultado) return;
+    if (ultimoResultado.metodo === 'ocr frente' && ultimaIdentidad && typeof FrenteDNI !== 'undefined') {
+      const av = FrenteDNI.reconciliar(ultimoResultado, ultimaIdentidad);
+      if (av.length) mostrarToast(av[0], 'error');
+    }
     const val = (el) => ((el && el.value) || '').trim();
 
     const domicilio = val(domInputDomicilio);
@@ -1067,7 +1071,8 @@
     if (scanFrame) scanFrame.classList.remove('activo');
 
     // 1) Resultado inmediato con lo que trae el QR
-    render(datosDesdeIdentidad(combinarIdentidad(r.datos, null)));
+    ultimaIdentidad = combinarIdentidad(r.datos, null);
+    render(fusionarConFrente(datosDesdeIdentidad(ultimaIdentidad)));
     if (estado) { estado.textContent = '✓ DNI nuevo: ' + (ultimoResultado.nombreCompleto || ''); estado.classList.remove('error'); estado.classList.add('ok'); }
     setStatus('DNI nuevo detectado', 'active'); reproducirSonidoExito(); vibrarExito();
     if (btnRepetir) btnRepetir.hidden = false;
@@ -1085,10 +1090,12 @@
       const m = res.identidad;
       const mrzBuena = m && m.checks && m.checks.nacimiento && m.checks.vencimiento ? m : null;
       const id = combinarIdentidad(r.datos, mrzBuena);
-      const datos = datosDesdeIdentidad(id);
+      ultimaIdentidad = id;
+      let datos = datosDesdeIdentidad(id);
       if (res.domicilio) datos.domicilio = res.domicilio;
       if (res.lugarNacimiento) datos.lugarNacimiento = res.lugarNacimiento;
       if (res.cuil) datos.cuil = res.cuil;
+      datos = fusionarConFrente(datos);
       render(datos);
 
       const faltan = [!datos.domicilio && 'domicilio', !datos.cuil && 'CUIL', !datos.fechaVencimiento && 'vencimiento'].filter(Boolean);
@@ -1188,6 +1195,40 @@
   });
 
   // ===== DNI nuevo: lectura del FRENTE por OCR =====
+  let ultimoFrenteDatos = null, ultimoFrenteMs = 0;
+
+  // Captura (el cuadro más nítido de varios) recortada al marco con forma de DNI + un margen
+  async function capturarFrenteRecortado(n = 3, pausaMs = 120) {
+    let mejor = null, mejorScore = -1;
+    for (let i = 0; i < n; i++) {
+      let r = null;
+      if (scanFrame) {
+        const b = scanFrame.getBoundingClientRect();
+        if (b.width > 40 && b.height > 40) r = rectEnVideo(video, { left: b.left, top: b.top, width: b.width, height: b.height }, 0.06);
+      }
+      if (!r || r.w < 200 || r.h < 120) r = { x: 0, y: 0, w: video.videoWidth, h: video.videoHeight };
+      const c = document.createElement('canvas');
+      c.width = Math.round(r.w); c.height = Math.round(r.h);
+      c.getContext('2d').drawImage(video, r.x, r.y, r.w, r.h, 0, 0, c.width, c.height);
+      const sc = nitidez(c);
+      if (sc > mejorScore) { mejorScore = sc; mejor = c; }
+      if (i < n - 1) await new Promise((res) => setTimeout(res, pausaMs));
+    }
+    return mejor;
+  }
+
+  // Une la lectura del reverso (QR/MRZ, más confiable) con el frente leído hace poco, si es del mismo documento
+  function fusionarConFrente(back) {
+    const f = ultimoFrenteDatos;
+    if (!f || Date.now() - ultimoFrenteMs > 5 * 60 * 1000) return back;
+    if (f.dni && back.dni && f.dni !== back.dni && FrenteDNI.similitud(f.dni, back.dni) < 0.75) return back;
+    const out = Object.assign({}, f);
+    Object.keys(back).forEach((k) => { if (back[k] !== null && back[k] !== undefined && back[k] !== '') out[k] = back[k]; });
+    out.metodo = 'frente + reverso'; out.tipoDocumento = 'DNI nuevo (frente y reverso)';
+    out.nombreCompleto = ((out.apellido || '') + ' ' + (out.nombre || '')).trim();
+    return out;
+  }
+
   async function leerFrenteOCR(opts) {
     const auto = !!(opts && opts.auto);
     if (ocrFrenteEnCurso) return;
@@ -1203,14 +1244,15 @@
     const btnF = document.getElementById('btn-dni-frente'); if (btnF) btnF.disabled = true;
     setEstadoMarco('detectando'); setStatus('Leyendo el frente…');
     if (escaneoEstado) escaneoEstado.textContent = auto ? '🔍 DNI detectado: leyendo el frente… mantené quieto' : '🔍 Leyendo el frente del DNI… mantené quieto';
-    let datosF = null, canvasF = null;
+    let datosF = null, canvasF = null, textosCrudos = [];
     try {
       for (let intento = 1; intento <= 2 && !datosF; intento++) {
-        canvasF = await capturarMasNitido(video, 3, 120);
-        const textos = await DomicilioOCR.leerTexto(canvasF, (p) => {
+        canvasF = await capturarFrenteRecortado(3, 120);
+        const textos = await DomicilioOCR.leerFrente(canvasF, (p) => {
           if (escaneoEstado) escaneoEstado.textContent = `🔍 Leyendo el frente… ${Math.round(p * 100)}% (${intento}/2)`;
         });
         datosF = FrenteDNI.parsearVarios(textos);
+        textosCrudos = textos;
       }
     } catch (e) { console.warn('OCR frente:', e); }
     if (btnF) btnF.disabled = false;
@@ -1230,10 +1272,15 @@
     if (id.sexo === 'M') id.sexo = 'Masculino'; else if (id.sexo === 'F') id.sexo = 'Femenino';
     const datos = datosDesdeIdentidad(id);
     datos.metodo = 'ocr frente'; datos.tipoDocumento = 'DNI nuevo (frente, por OCR)'; datos.mrzVerificada = false;
+    datos.raw = textosCrudos.map((t, i) => '--- pasada ' + (i + 1) + ' ---\n' + t).join('\n');
+    // Si el reverso ya se leyó, se cruzan los datos: el reverso corrige los errores del OCR
+    const avisos = ultimaIdentidad ? FrenteDNI.reconciliar(datos, ultimaIdentidad) : [];
+    ultimoFrenteDatos = Object.assign({}, datos); ultimoFrenteMs = Date.now();
     render(datos);
+    if (avisos.length) mostrarToast(avisos[0], 'error');
     if (estado) { estado.textContent = '✓ ' + (datos.nombreCompleto || datos.dni || 'Documento') + ' · verificá los datos'; estado.classList.remove('error'); estado.classList.add('ok'); }
     const faltan = [!datos.dni && 'DNI', !datos.apellido && 'apellido', !datos.nombre && 'nombre', !datos.fechaNacimiento && 'nacimiento', !datos.sexo && 'sexo'].filter(Boolean);
-    if (escaneoEstado) escaneoEstado.textContent = faltan.length ? '⚠ No se leyó: ' + faltan.join(', ') + '. Completalo con "leer reverso".' : '✅ Frente leído por OCR: verificá los datos';
+    if (escaneoEstado) escaneoEstado.textContent = faltan.length ? '⚠ No se leyó: ' + faltan.join(', ') + '. Completalo con "leer reverso".' : (ultimaIdentidad && !avisos.length ? '✅ Frente verificado con el reverso' : '✅ Frente leído: ahora escaneá el reverso para verificarlo');
     setStatus('Frente leído', 'active'); reproducirSonidoExito(); vibrarExito();
     if (btnRepetir) btnRepetir.hidden = false;
   }

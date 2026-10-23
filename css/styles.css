@@ -135,7 +135,7 @@ h1, h2 { margin: 0; }
 /* sin filtros sobre el video: son los que hacen lenta la cámara */
 
 .scan-frame {
-  position: absolute; left: 50%; top: 50%; width: 78%; height: 58%; transform: translate(-50%, -50%);
+  position: absolute; left: 50%; top: 50%; width: 86%; aspect-ratio: 1.586; transform: translate(-50%, -50%);
   pointer-events: none; opacity: 0; transition: opacity .25s; --c: rgba(255, 255, 255, .9);
   box-shadow: 0 0 0 100vmax rgba(5, 10, 20, .42);
   border-radius: 10px;
@@ -310,7 +310,7 @@ h1, h2 { margin: 0; }
 @media (min-width: 720px) {
   .app-main { grid-template-columns: 1fr; padding: 22px 16px; }
   .camera-viewport { aspect-ratio: 16 / 10; max-height: 520px; }
-  .scan-frame { width: 56%; height: 62%; --h: 200px; }
+  .scan-frame { width: 60%; --h: 200px; }
 }
 @media (max-width: 420px) {
   .brand-text p { display: none; }
