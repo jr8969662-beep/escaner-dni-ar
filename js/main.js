@@ -405,6 +405,7 @@
     }
     render(datos); if (estado) { estado.textContent = '✓ ' + (datos.nombreCompleto || datos.dni || datos.numero || 'Documento'); estado.classList.remove('error'); estado.classList.add('ok'); }
     if (escaneoEstado) escaneoEstado.textContent = '✅ Escaneo OK'; setStatus('Escaneo OK', 'active'); if (btnRepetir) btnRepetir.hidden = false; reproducirSonidoExito(); vibrarExito();
+    setTimeout(completarDesdeFrente, 500);
   }
 
   function setTexto(id, valor) { const el = document.getElementById(id); if (!el) return; el.textContent = (valor === null || valor === undefined || valor === '') ? '—' : String(valor); el.classList.remove('ok', 'err'); }
@@ -536,7 +537,7 @@
         const datos = parsearSeguro(texto);
         ultimaFotoDataUrl = src;
         
-        if (datos && (datos.dni || datos.numero || datos.apellido || datos.nombre)) { render(datos); if (estado) { estado.textContent = '✓ ' + (datos.nombreCompleto || datos.dni || datos.numero); estado.classList.remove('error'); estado.classList.add('ok'); } if (escaneoEstado) escaneoEstado.textContent = '✅ Escaneo OK'; setStatus('Escaneo OK', 'active'); if (btnRepetir) btnRepetir.hidden = false; reproducirSonidoExito(); vibrarExito(); return; }
+        if (datos && (datos.dni || datos.numero || datos.apellido || datos.nombre)) { render(datos); if (estado) { estado.textContent = '✓ ' + (datos.nombreCompleto || datos.dni || datos.numero); estado.classList.remove('error'); estado.classList.add('ok'); } if (escaneoEstado) escaneoEstado.textContent = '✅ Escaneo OK'; setStatus('Escaneo OK', 'active'); if (btnRepetir) btnRepetir.hidden = false; reproducirSonidoExito(); vibrarExito(); setTimeout(completarDesdeFrente, 500); return; }
         mostrarErrorDocumento('Documento no reconocido', `No pudimos interpretar este código como un documento de ${paisElegidoNombre}.`); if (estado) { estado.textContent = '⚠️ No se pudieron extraer datos'; estado.classList.add('error'); } setStatus('Sin datos', 'error'); if (btnRepetir) btnRepetir.hidden = false; reproducirSonidoError(); vibrarError();
       }; 
       imageEl.onerror = () => { mostrarToast('No se pudo abrir la imagen', 'error'); setStatus('Error', 'error'); };
@@ -1250,7 +1251,7 @@
         canvasF = await capturarFrenteRecortado(3, 120);
         const textos = await DomicilioOCR.leerFrente(canvasF, (p) => {
           if (escaneoEstado) escaneoEstado.textContent = `🔍 Leyendo el frente… ${Math.round(p * 100)}% (${intento}/2)`;
-        });
+        }, (t) => FrenteDNI.completo(FrenteDNI.parsearVarios(t)));
         datosF = FrenteDNI.parsearVarios(textos);
         textosCrudos = textos;
       }
@@ -1285,12 +1286,35 @@
     if (btnRepetir) btnRepetir.hidden = false;
   }
 
+  // DNI viejo leído por PDF417: el código no trae el vencimiento; se completa leyendo el frente de la misma foto (sin frenar la cámara)
+  async function completarDesdeFrente() {
+    const d = ultimoResultado;
+    if (!d || paisSeleccionado !== 'arg' || d.metodo === 'ocr frente' || ocrFrenteEnCurso) return;
+    if (d.fechaVencimiento && d.nacionalidad && d.tramite && d.ejemplar && d.fechaEmision) return;
+    if (!ultimaFotoDataUrl || typeof FrenteDNI === 'undefined' || typeof DomicilioOCR === 'undefined' || !DomicilioOCR.leerFrente) return;
+    ocrFrenteEnCurso = true;
+    const previo = escaneoEstado ? escaneoEstado.textContent : '';
+    try {
+      if (escaneoEstado) escaneoEstado.textContent = '🔍 Completando datos con el frente…';
+      const textos = await DomicilioOCR.leerFrente(ultimaFotoDataUrl, null, (t) => FrenteDNI.completo(FrenteDNI.parsearVarios(t)));
+      const r = FrenteDNI.parsearVarios(textos);
+      if (!r || ultimoResultado !== d) return;
+      if (r.dni && d.dni && r.dni !== d.dni && FrenteDNI.similitud(r.dni, d.dni) < 0.75) return;   // no es el mismo documento
+      let n = 0;
+      ['fechaVencimiento', 'nacionalidad', 'tramite', 'ejemplar', 'fechaEmision'].forEach((k) => { if (!d[k] && r[k]) { d[k] = r[k]; n++; } });
+      if (!d.sexo && r.sexo) { d.sexo = r.sexo === 'M' ? 'Masculino' : r.sexo === 'F' ? 'Femenino' : r.sexo; n++; }
+      if (d.fechaVencimiento) d.vigente = new Date(d.fechaVencimiento + 'T23:59:59') >= new Date();
+      if (n) { render(d); mostrarToast('✓ Se completaron ' + n + ' dato(s) con el frente', 'success'); }
+    } catch (e) { console.warn('Completar con el frente:', e); }
+    finally { ocrFrenteEnCurso = false; if (escaneoEstado) escaneoEstado.textContent = previo.indexOf('Completando') >= 0 ? '✅ Escaneo OK' : previo; }
+  }
+
   function inyectarBotonFrente() {
     const cont = document.querySelector('.camera-actions');
     if (!cont || document.getElementById('btn-dni-frente')) return;
     const b = document.createElement('button');
     b.type = 'button'; b.id = 'btn-dni-frente'; b.className = 'btn btn-secondary';
-    b.innerHTML = '<span>DNI nuevo: leer frente</span>';
+    b.innerHTML = '<span>Leer frente (OCR)</span>';
     b.addEventListener('click', leerFrenteOCR);
     cont.insertBefore(b, document.getElementById('btn-dni-nuevo') || null);
   }

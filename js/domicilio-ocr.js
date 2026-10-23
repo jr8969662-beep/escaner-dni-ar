@@ -94,7 +94,7 @@ const DomicilioOCR = (() => {
 
   // FRENTE del DNI nuevo: la imagen debe ser la tarjeta (recortada al marco). Pasadas: párrafo, texto disperso y dos zonas
   // ampliadas (nombres; documento + fechas). Devuelve los textos para que FrenteDNI decida cada dato por votación.
-  async function leerFrente(fuente, onProgress) {
+  async function leerFrente(fuente, onProgress, suficiente) {
     progresoCb = typeof onProgress === 'function' ? onProgress : null;
     const w = await initWorker();
     const gris = preprocesar(await aElemento(fuente));
@@ -120,6 +120,7 @@ const DomicilioOCR = (() => {
       const { data: { text } } = await w.recognize(pasadas[i].img);
       textos.push(text);
       log('📄 OCR frente pasada ' + (i + 1) + ':\n' + text);
+      if (typeof suficiente === 'function' && suficiente(textos)) break;   // ya está todo: se corta para no demorar
     }
     await w.setParameters(PARAMS_TEXTO);
     if (progresoCb) progresoCb(1);
