@@ -273,7 +273,7 @@
     if (stream) return;
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { mostrarErrorCamara('Este navegador no permite acceder a la cámara.'); setStatus('Sin cámara', 'error'); return; }
     const configs = [
-      { video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 }, focusMode: 'continuous', exposureMode: 'continuous' }, audio: false },
+      { video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30, max: 30 }, focusMode: 'continuous', exposureMode: 'continuous' }, audio: false },
       { video: { facingMode: 'environment' }, audio: false },
       { video: true, audio: false }
     ];
@@ -297,12 +297,14 @@
       if (estado) estado.textContent = 'Apuntá al código del documento.'; setStatus('Cámara activa', 'active');
       trackActual = stream.getVideoTracks()[0]; const caps = trackActual.getCapabilities ? trackActual.getCapabilities() : {};
       flashSoportado = !!caps.torch; if (flashSoportado && btnFlash) btnFlash.classList.add('activo');
-      setupCameraControls(); autoFlashActivo = false; iniciarEscaneoContinuo(); iniciarDeteccionDNINuevo();
+      optimizarTrack(trackActual, caps);
+      setupCameraControls(); autoFlashActivo = false; iniciarEscaneoContinuo(); iniciarDeteccionDNINuevo(); iniciarMonitorCalidad();
     } catch (err) { mostrarErrorCamara('Error al mostrar el video.'); setStatus('Error', 'error'); }
   }
 
   function detenerCamara() {
     detenerDeteccionDNINuevo();
+    if (typeof detenerMonitorCalidad === 'function') detenerMonitorCalidad();
     if (stopScan) { stopScan(); stopScan = null; }
     if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
     trackActual = null; flashEncendido = false; autoFlashActivo = false; currentZoom = 1;
@@ -1101,15 +1103,106 @@
     procesandoDNINuevo = false;
   }
 
+  // ===== Cámara profesional: ajustes del sensor, guía en vivo y lectura automática del frente =====
+  let monitorCalidad = null, ocrFrenteEnCurso = false;
+  let camInicioMs = 0, estableDesdeMs = 0, ultimoIntentoFrenteMs = 0, intentosFrenteAuto = 0, pausadaPorSegundoPlano = false;
+  let cvMuestra = null, grisPrevio = null;
+  const HINT_BASE = 'Encuadrá el código del documento dentro del marco';
+
+  // Enfoque, exposición y balance de blancos continuos (solo lo que el teléfono soporta)
+  function optimizarTrack(track, caps) {
+    if (!track || !track.applyConstraints) return;
+    const adv = {};
+    if ((caps.focusMode || []).includes('continuous')) adv.focusMode = 'continuous';
+    if ((caps.exposureMode || []).includes('continuous')) adv.exposureMode = 'continuous';
+    if ((caps.whiteBalanceMode || []).includes('continuous')) adv.whiteBalanceMode = 'continuous';
+    if (Object.keys(adv).length) track.applyConstraints({ advanced: [adv] }).catch(() => {});
+  }
+
+  // Muestrea el video en miniatura (barato): luz, reflejo y movimiento
+  function muestrearVideo() {
+    if (!video || !video.videoWidth) return null;
+    const w = 64, h = 48;
+    if (!cvMuestra) { cvMuestra = document.createElement('canvas'); cvMuestra.width = w; cvMuestra.height = h; }
+    const x = cvMuestra.getContext('2d', { willReadFrequently: true });
+    x.drawImage(video, 0, 0, w, h);
+    const d = x.getImageData(0, 0, w, h).data;
+    const gris = new Uint8Array(w * h);
+    let suma = 0, quemados = 0, dif = 0;
+    for (let i = 0, p = 0; i < d.length; i += 4, p++) {
+      const l = (d[i] * 77 + d[i + 1] * 150 + d[i + 2] * 29) >> 8;
+      gris[p] = l; suma += l; if (l >= 250) quemados++;
+      if (grisPrevio) dif += Math.abs(l - grisPrevio[p]);
+    }
+    const n = w * h, mov = grisPrevio ? dif / n : 0;
+    grisPrevio = gris;
+    return { media: suma / n, quemado: quemados / n, mov };
+  }
+
+  function detenerMonitorCalidad() {
+    if (monitorCalidad) { clearInterval(monitorCalidad); monitorCalidad = null; }
+    grisPrevio = null; estableDesdeMs = 0;
+  }
+
+  function iniciarMonitorCalidad() {
+    detenerMonitorCalidad();
+    camInicioMs = Date.now(); estableDesdeMs = 0; intentosFrenteAuto = 0; ultimoIntentoFrenteMs = 0;
+    monitorCalidad = setInterval(() => {
+      if (!stream) { detenerMonitorCalidad(); return; }
+      if (document.hidden || ocrFrenteEnCurso || procesandoDNINuevo) return;
+      const m = muestrearVideo();
+      if (!m) return;
+      const ahora = Date.now();
+      let hint = HINT_BASE, alerta = true;
+      if (m.media < 55) hint = flashSoportado ? 'Poca luz: encendé la linterna 🔦' : 'Poca luz: acercate a una lámpara';
+      else if (m.quemado > 0.06) hint = 'Hay reflejo: inclinalo un poco';
+      else if (m.mov > 9) hint = 'Mantené quieto el celular';
+      else { alerta = false; }
+      if (cameraHint) {
+        if (cameraHint.textContent !== hint) cameraHint.textContent = hint;
+        cameraHint.classList.toggle('alerta', alerta);
+      }
+      // Imagen estable y con buena luz
+      const estable = m.mov < 4 && m.media >= 55 && m.quemado <= 0.06;
+      if (estable) { if (!estableDesdeMs) estableDesdeMs = ahora; } else estableDesdeMs = 0;
+
+      // Sin código tras unos segundos con el DNI quieto: se prueba el frente del DNI nuevo por OCR
+      if (paisSeleccionado === 'arg' && detectorNuevoActivo && estableDesdeMs && ahora - estableDesdeMs > 1800 &&
+          ahora - camInicioMs > 7000 && ahora - ultimoIntentoFrenteMs > 12000 && intentosFrenteAuto < 3 &&
+          typeof FrenteDNI !== 'undefined' && typeof DomicilioOCR !== 'undefined' && DomicilioOCR.leerTexto) {
+        intentosFrenteAuto++; ultimoIntentoFrenteMs = ahora;
+        leerFrenteOCR({ auto: true });
+      }
+    }, 500);
+  }
+
+  // Al salir de la app o cambiar de pestaña se libera la cámara (batería y rendimiento) y se retoma al volver
+  document.addEventListener('visibilitychange', () => {
+    const modalAbierto = modalDomicilio && !modalDomicilio.hidden;
+    if (document.hidden) {
+      if (stream && !modalAbierto && !ocrFrenteEnCurso) { pausadaPorSegundoPlano = true; detenerMonitorCalidad(); detenerCamara(); }
+    } else if (pausadaPorSegundoPlano) {
+      pausadaPorSegundoPlano = false;
+      if (!stream && !modalAbierto && img && img.hidden) iniciarCamara();
+    }
+  });
+
   // ===== DNI nuevo: lectura del FRENTE por OCR =====
-  async function leerFrenteOCR() {
+  async function leerFrenteOCR(opts) {
+    const auto = !!(opts && opts.auto);
+    if (ocrFrenteEnCurso) return;
+    ocrFrenteEnCurso = true;
+    try { await leerFrenteOCRInterno(auto); } finally { ocrFrenteEnCurso = false; }
+  }
+
+  async function leerFrenteOCRInterno(auto) {
     if (typeof FrenteDNI === 'undefined' || typeof DomicilioOCR === 'undefined') { mostrarToast('Falta cargar el lector del frente', 'error'); return; }
     if (!stream || !video || !video.videoWidth) { mostrarToast('Primero iniciá la cámara y apuntá al frente del DNI', 'error'); return; }
     detenerDeteccionDNINuevo();
     if (stopScan) { stopScan(); stopScan = null; }
     const btnF = document.getElementById('btn-dni-frente'); if (btnF) btnF.disabled = true;
     setEstadoMarco('detectando'); setStatus('Leyendo el frente…');
-    if (escaneoEstado) escaneoEstado.textContent = '🔍 Leyendo el frente del DNI… mantené quieto';
+    if (escaneoEstado) escaneoEstado.textContent = auto ? '🔍 DNI detectado: leyendo el frente… mantené quieto' : '🔍 Leyendo el frente del DNI… mantené quieto';
     let datosF = null, canvasF = null;
     try {
       for (let intento = 1; intento <= 2 && !datosF; intento++) {
@@ -1122,9 +1215,9 @@
     } catch (e) { console.warn('OCR frente:', e); }
     if (btnF) btnF.disabled = false;
     if (!datosF) {
-      setEstadoMarco('error'); setStatus('Sin datos', 'error');
-      if (escaneoEstado) escaneoEstado.textContent = '⚠ No se pudo leer el frente. Más luz, sin reflejos, todo el DNI dentro del marco.';
-      mostrarToast('No se pudo leer el frente. Probá de nuevo.', 'error');
+      setEstadoMarco('buscando'); setStatus('Cámara activa', 'active');
+      if (escaneoEstado) escaneoEstado.textContent = auto ? '🔍 Buscando código…' : '⚠ No se pudo leer el frente. Más luz, sin reflejos, todo el DNI dentro del marco.';
+      if (!auto) mostrarToast('No se pudo leer el frente. Probá de nuevo.', 'error');
       iniciarEscaneoContinuo(); iniciarDeteccionDNINuevo();
       return;
     }

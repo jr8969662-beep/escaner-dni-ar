@@ -172,6 +172,7 @@ h1, h2 { margin: 0; }
   padding: 6px 14px; border-radius: 999px; background: rgba(8, 14, 26, .78); border: 1px solid rgba(201, 162, 39, .5);
   color: #fff; font-size: 12px; font-weight: 600; letter-spacing: .03em; text-align: center; transition: opacity .3s; pointer-events: none;
 }
+.camera-hint.alerta { border-color: var(--warn); background: rgba(60, 40, 5, .85); }
 .camera-controls { position: absolute; top: 10px; right: 10px; display: flex; flex-direction: column; align-items: flex-end; gap: 10px; z-index: 5; }
 .icon-btn {
   width: 42px; height: 42px; border-radius: 50%; border: 1px solid rgba(255, 255, 255, .25); background: rgba(8, 14, 26, .7); color: #fff; font-size: 18px; display: grid; place-items: center;
