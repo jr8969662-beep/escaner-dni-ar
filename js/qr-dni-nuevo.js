@@ -52,17 +52,44 @@ const QRDNINuevo = (() => {
   ];
 
   // Para el video en vivo (la tarjeta puede estar en cualquier parte del cuadro): cuadro entero
-  const INTENTOS_FRAME = [{ x: 0, y: 0, w: 1, h: 1, anchos: [1920, 2800] }];
+  const INTENTOS_FRAME = [{ x: 0, y: 0, w: 1, h: 1, anchos: [1920, 2560] }];
+
+  // Detector nativo del teléfono (rápido y fuera del hilo principal): evita que la cámara se ponga lenta.
+  let detectorNativo = null, llamadasFrame = 0;
+  try { if ('BarcodeDetector' in window) detectorNativo = new BarcodeDetector({ formats: ['qr_code'] }); } catch (e) { detectorNativo = null; }
+
+  async function decodificarNativo(canvas) {
+    try {
+      const lista = await detectorNativo.detect(canvas);
+      for (const b of lista) {
+        const datos = parsear(b.rawValue || '');
+        if (!datos) continue;
+        const p = b.cornerPoints;
+        return { texto: b.rawValue, datos, ubicacion: p && p.length === 4 ? { tl: p[0], tr: p[1], br: p[2], bl: p[3] } : null };
+      }
+    } catch (e) { detectorNativo = null; }   // si falla, se usa jsQR
+    return null;
+  }
 
   // opciones.modo === 'frame' -> busca en todo el cuadro (cámara en vivo). Por defecto asume tarjeta encuadrada.
   // opciones.anchos -> anchos de trabajo en px (para fotos subidas conviene el tamaño original).
   async function decodificar(canvas, opciones = {}) {
     if (typeof jsQR === 'undefined' || !canvas) return null;
     const lista = opciones.modo === 'frame' ? INTENTOS_FRAME : INTENTOS;
+    let anchosFrame = null;
+    if (opciones.modo === 'frame') {
+      llamadasFrame++;
+      if (detectorNativo) {
+        const rn = await decodificarNativo(canvas);
+        if (rn) return rn;
+        if (detectorNativo && llamadasFrame % 4 !== 0) return null;   // jsQR (pesado) solo 1 de cada 4 veces
+      }
+      anchosFrame = [llamadasFrame % 2 ? 1920 : 2560];                // una sola escala por vuelta
+    }
     for (const it of lista) {
       const sx = Math.round(canvas.width * it.x), sy = Math.round(canvas.height * it.y);
       const sw = Math.round(canvas.width * it.w), sh = Math.round(canvas.height * it.h);
-      for (const ancho of (opciones.anchos || it.anchos)) {
+      for (const ancho of (opciones.anchos || anchosFrame || it.anchos)) {
         const esc = ancho / sw;
         const w = Math.round(sw * esc), h = Math.round(sh * esc);
         if (w * h > 9e6) continue;
@@ -74,7 +101,7 @@ const QRDNINuevo = (() => {
         ctx.imageSmoothingQuality = 'high';
         ctx.drawImage(canvas, sx, sy, sw, sh, 0, 0, w, h);
         const img = ctx.getImageData(0, 0, w, h);
-        const res = jsQR(img.data, w, h, { inversionAttempts: 'attemptBoth' });
+        const res = jsQR(img.data, w, h, { inversionAttempts: opciones.modo === 'frame' ? 'dontInvert' : 'attemptBoth' });
         if (res && res.data) {
           const datos = parsear(res.data);
           if (datos) {
