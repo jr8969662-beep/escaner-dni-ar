@@ -1,7 +1,7 @@
 # 🇦🇷 Escáner de Documentos Sudamericanos
 
 Escáner de documentos de identidad que funciona **100% en el navegador**.
-Lee códigos de barras (QR, PDF417, Code128) y MRZ. Sin servidores. Sin subir imágenes. Todo local.
+Lee códigos de barras (QR, PDF417, Code128) y MRZ. Por defecto no sube nada: todo se procesa y se guarda en el dispositivo (la sincronización con Supabase está desactivada hasta que se configure).
 
 ## ✨ Características
 
@@ -16,7 +16,7 @@ Lee códigos de barras (QR, PDF417, Code128) y MRZ. Sin servidores. Sin subir im
 - 📱 **PWA instalable** en el celular
 - 🎨 **Modo claro/oscuro**
 - 🔔 **Sonido y vibración** al detectar
-- 🛡️ **100% local**: las imágenes nunca salen del dispositivo
+- 🛡️ **Local por defecto**: las imágenes no salen del dispositivo salvo que se active Supabase (ver sección Privacidad)
 
 ## 🌎 Países soportados
 
@@ -48,5 +48,16 @@ Lee códigos de barras (QR, PDF417, Code128) y MRZ. Sin servidores. Sin subir im
 ## 📦 Instalación local
 
 ```bash
-git clone https://github.com/jri896662-beep/escaner-dni-ar.git
+git clone https://github.com/jr8969662-beep/escaner-dni-ar.git
 cd escaner-dni-ar
+
+
+## 🆕 DNI argentino nuevo (policarbonato, 2026)
+
+- **Reverso**: QR denso + líneas MRZ (`<<<`) + OCR de domicilio, lugar de nacimiento y CUIL.
+- **Frente**: sin código; se lee por OCR (apellido, nombre, sexo, nacionalidad, fechas, número y ejemplar). Si no se detecta ningún código con el documento quieto, la app prueba el frente automáticamente.
+
+## 🔒 Privacidad y seguridad
+
+- Los datos del DNI son personales (Ley 25.326). Si se activa Supabase: usar un bucket **privado**, RLS y login para el panel `admin.html`, pedir consentimiento y definir cuánto tiempo se conservan.
+- Nunca subir al repositorio fotos ni datos reales de documentos (ni siquiera de prueba): usar datos ficticios.

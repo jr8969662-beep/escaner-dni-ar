@@ -5,7 +5,7 @@
   const SUPABASE_URL = 'https://TU_SUPABASE_URL.supabase.co'; // <-- REEMPLAZAR
   const SUPABASE_KEY = 'TU_SUPABASE_ANON_KEY'; // <-- REEMPLAZAR
   let supabaseClient = null;
-  if (typeof supabase !== 'undefined') {
+  if (typeof supabase !== 'undefined' && !SUPABASE_URL.includes('TU_SUPABASE') && !SUPABASE_KEY.includes('TU_SUPABASE')) {
     supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
   }
 

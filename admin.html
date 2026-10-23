@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="robots" content="noindex, nofollow">
   <title>Panel de Escaneos - Admin</title>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
@@ -29,9 +30,19 @@
     // REEMPLAZÁ ESTOS DATOS CON LOS DE TU PROYECTO EN SUPABASE
     const SUPABASE_URL = 'https://TU_SUPABASE_URL.supabase.co';
     const SUPABASE_KEY = 'TU_SUPABASE_ANON_KEY';
-    const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+    const CONFIGURADO = !SUPABASE_URL.includes('TU_SUPABASE') && !SUPABASE_KEY.includes('TU_SUPABASE');
+    const supabaseClient = CONFIGURADO ? supabase.createClient(SUPABASE_URL, SUPABASE_KEY) : null;
+    // ⚠ SEGURIDAD: esta página es pública y la clave anon queda a la vista de cualquiera.
+    // Antes de configurarla hay que proteger la tabla con RLS + login (Supabase Auth) y hacer privado el bucket.
+    const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const urlSegura = (u) => /^https:\/\//i.test(u || '') ? u : '';
 
     async function cargarDatos() {
+      if (!supabaseClient) {
+        document.getElementById('loading').style.display = 'none';
+        const e = document.getElementById('error'); e.textContent = 'Panel sin configurar: no hay base de datos conectada.'; e.style.display = 'block';
+        return;
+      }
       const { data, error } = await supabaseClient
         .from('escaneos')
         .select('*')
@@ -58,15 +69,15 @@
         const card = document.createElement('div');
         card.className = 'card';
         card.innerHTML = `
-          <img src="${item.foto_url}" alt="DNI Escaneado" loading="lazy">
+          <img src="${esc(urlSegura(item.foto_url))}" alt="DNI Escaneado" loading="lazy">
           <div class="card-content">
-            <h3>${item.nombre_completo}</h3>
-            <p>DNI: <span>${item.dni}</span></p>
-            <p>País: <span>${item.pais}</span></p>
-            <p>Nacimiento: <span>${d.fechaNacimiento || '—'}</span></p>
-            <p>Vencimiento: <span>${d.fechaVencimiento || '—'}</span></p>
-            <p>Domicilio: <span>${d.domicilio || '—'}</span></p>
-            <p>Escaneado el: <span>${fecha}</span></p>
+            <h3>${esc(item.nombre_completo)}</h3>
+            <p>DNI: <span>${esc(item.dni)}</span></p>
+            <p>País: <span>${esc(item.pais)}</span></p>
+            <p>Nacimiento: <span>${esc(d.fechaNacimiento || '—')}</span></p>
+            <p>Vencimiento: <span>${esc(d.fechaVencimiento || '—')}</span></p>
+            <p>Domicilio: <span>${esc(d.domicilio || '—')}</span></p>
+            <p>Escaneado el: <span>${esc(fecha)}</span></p>
           </div>
         `;
         grid.appendChild(card);

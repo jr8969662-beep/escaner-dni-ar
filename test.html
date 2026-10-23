@@ -17,9 +17,9 @@
 <body>
   <h1>🧪 Test del Parser</h1>
   <p>Pegá el texto crudo que ves en "Ver texto crudo" (o el MRZ de ejemplo):</p>
-  <textarea id="input" placeholder="Pegá acá el texto crudo...">IDARG25122169&lt;0&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;
-7602263M4104216ARG&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;4
-SANCHEZ&lt;&lt;RAMIRO&lt;ERNESTO&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;</textarea>
+  <textarea id="input" placeholder="Pegá acá el texto crudo...">IDARG12345678&lt;8&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;
+9001158M4104216ARG&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;2
+PEREZ&lt;&lt;JUAN&lt;CARLOS&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;</textarea>
   <button onclick="probar()">▶ Probar parser</button>
   <button onclick="cargarEjemplo()">📋 Cargar ejemplo</button>
   <h2>Resultado:</h2>
@@ -30,9 +30,11 @@ SANCHEZ&lt;&lt;RAMIRO&lt;ERNESTO&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;</textarea>
   <script>
     function cargarEjemplo() {
       document.getElementById('input').value =
-        'IDARG25122169<0<<<<<<<<<<<<<<<<<\n' +
-        '7602263M4104216ARG<<<<<<<<<<<<<4\n' +
-        'SANCHEZ<<RAMIRO<ERNESTO<<<<<<<<<<';
+        'IDARG12345678<8<<<<<<<<<<<<<<<
+' +
+        '9001158M4104216ARG<<<<<<<<<<<2
+' +
+        'PEREZ<<JUAN<CARLOS<<<<<<<<<<<<';
     }
     function probar() {
       const texto = document.getElementById('input').value;
@@ -44,7 +46,7 @@ SANCHEZ&lt;&lt;RAMIRO&lt;ERNESTO&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;</textarea>
       try {
         console.log('=== Probando parser ===');
         console.log('Entrada:', texto);
-        const data = DNIParser.parsearUniversal(texto);
+        const data = DNIParser.parsear(texto);
         console.log('Salida:', data);
         out.innerHTML = '<span class="ok">✓ Parseado (método: ' + (data?.metodo || '?') + ')</span>\n\n' +
                         JSON.stringify(data, null, 2);
