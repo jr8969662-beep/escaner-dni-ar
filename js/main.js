@@ -172,10 +172,10 @@
   function aplicarTema(tema) {
     if (tema === 'light') {
       document.documentElement.setAttribute('data-theme', 'light');
-      const meta = document.querySelector('meta[name="theme-color"]'); if (meta) meta.setAttribute('content', '#f7f8fa');
+      const meta = document.querySelector('meta[name="theme-color"]'); if (meta) meta.setAttribute('content', '#e9edf3');
     } else {
       document.documentElement.removeAttribute('data-theme');
-      const meta = document.querySelector('meta[name="theme-color"]'); if (meta) meta.setAttribute('content', '#08090d');
+      const meta = document.querySelector('meta[name="theme-color"]'); if (meta) meta.setAttribute('content', '#0a1220');
     }
     localStorage.setItem(TEMA_KEY, tema);
   }
@@ -1034,14 +1034,14 @@
 
     const tick = async () => {
       if (!detectorNuevoActivo) return;
-      if (stream && video && video.videoWidth && paisSeleccionado === 'arg') {
+      if (stream && video && video.videoWidth && paisSeleccionado === 'arg' && !document.hidden) {
         try {
           const frame = capturarFrame(video);
           const r = await QRDNINuevo.decodificar(frame, { modo: 'frame' });
           if (r && detectorNuevoActivo) { detectorNuevoActivo = false; exitoDNINuevo(r, frame); return; }
         } catch (e) { log(e); }
       }
-      if (detectorNuevoActivo) setTimeout(tick, 900);
+      if (detectorNuevoActivo) setTimeout(tick, 1300);
     };
     setTimeout(tick, 1200);
   }
