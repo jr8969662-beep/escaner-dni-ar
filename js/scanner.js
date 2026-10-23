@@ -7,23 +7,28 @@ const DNIScanner = (() => {
 
   if (barcodeDisponible) {
     try {
-      // 🔥 SOLO PDF417 y códigos de barras. Quitamos 'qr_code'
-      barcodeDetector = new BarcodeDetector({ formats: ['pdf417', 'code_128', 'code_39', 'data_matrix'] });
+      barcodeDetector = new BarcodeDetector({ formats: ['pdf417', 'qr_code', 'code_128', 'code_39', 'data_matrix', 'aztec'] });
     } catch (e) { barcodeDetector = null; }
   }
   if (zxingDisponible) {
     try {
       const hints = new Map();
-      // 🔥 SOLO PDF417 y lineales. Quitamos QR_CODE
       hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
         ZXing.BarcodeFormat.PDF_417, 
+        ZXing.BarcodeFormat.QR_CODE, 
         ZXing.BarcodeFormat.CODE_128, 
         ZXing.BarcodeFormat.CODE_39, 
-        ZXing.BarcodeFormat.DATA_MATRIX
+        ZXing.BarcodeFormat.DATA_MATRIX, 
+        ZXing.BarcodeFormat.AZTEC
       ]);
       hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
       zxingReader = new ZXing.BrowserMultiFormatReader(hints, { delayBetweenScanAttempts: 100, delayBetweenScanSuccess: 500 });
     } catch (e) { zxingReader = null; }
+  }
+
+  // Función para saber si es el link del gobierno y descartarlo
+  function esURLInvalida(txt) {
+    return /^https?:\/\//i.test(txt) || /argentina\.gob\.ar/i.test(txt);
   }
 
   function extraerROI(canvasOriginal) {
@@ -59,14 +64,29 @@ const DNIScanner = (() => {
     if (barcodeDetector) {
       try {
         const codigos = await barcodeDetector.detect(canvasEscaneo);
-        if (codigos && codigos.length) return codigos[0].rawValue;
+        if (codigos && codigos.length) {
+          for (const cod of codigos) {
+            if (!esURLInvalida(cod.rawValue)) return cod.rawValue;
+          }
+        }
       } catch (e) {}
     }
 
     if (zxingReader) {
       try {
         const resultado = await zxingReader.decodeFromCanvas(canvasEscaneo);
-        if (resultado && resultado.getText) return resultado.getText();
+        if (resultado && resultado.getText) {
+          const txt = resultado.getText();
+          if (!esURLInvalida(txt)) return txt;
+        }
+      } catch (e) {}
+    }
+
+    if (jsQRDisponible) {
+      try {
+        const imageData = ctx.getImageData(0, 0, canvasEscaneo.width, canvasEscaneo.height);
+        const qr = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'dontInvert' });
+        if (qr && qr.data && !esURLInvalida(qr.data)) return qr.data;
       } catch (e) {}
     }
 
@@ -75,14 +95,13 @@ const DNIScanner = (() => {
 
   function escanearContinuo(video, canvas, onDetected, onTimeout, opciones = {}) {
     const intervaloMs = opciones.intervaloMs || 300;
-    const timeoutMs = opciones.timeoutMs || 8000; // 8 segundos máximo para buscar el PDF417
+    const timeoutMs = opciones.timeoutMs || 20000;
     const anchoMax = opciones.anchoMax || 1280;
     const usarROI = opciones.usarROI !== false;
     const onBrillo = opciones.onBrillo;
+    const framesConfirmacion = opciones.framesConfirmacion || 2;
     
     let activo = true, intentos = 0, ultimoTextoDetectado = null, framesConfirmados = 0;
-    
-    // Al llegar al timeout, llamamos a onTimeout (que activará el OCR)
     const timer = setTimeout(() => { if (activo) { activo = false; if (onTimeout) onTimeout(); } }, timeoutMs);
 
     async function loop() {
@@ -108,7 +127,7 @@ const DNIScanner = (() => {
               ultimoTextoDetectado = texto;
               framesConfirmados = 1;
             }
-            if (framesConfirmados >= 2) {
+            if (framesConfirmados >= framesConfirmacion) {
               activo = false; clearTimeout(timer); onDetected(texto); return;
             }
           } else {
