@@ -1,8 +1,9 @@
 (() => {
   'use strict';
 
-  const SUPABASE_URL = 'https://TU_SUPABASE_URL.supabase.co'; 
-  const SUPABASE_KEY = 'TU_SUPABASE_ANON_KEY'; 
+  // --- CONFIGURACIÓN DE SUPABASE ---
+  const SUPABASE_URL = 'https://TU_SUPABASE_URL.supabase.co'; // <-- REEMPLAZAR
+  const SUPABASE_KEY = 'TU_SUPABASE_ANON_KEY'; // <-- REEMPLAZAR
   let supabaseClient = null;
   if (typeof supabase !== 'undefined') {
     supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
@@ -25,6 +26,8 @@
 
   let modoReversoNuevo = false;
   let ultimaIdentidad = null;
+
+  function log(msg) { if (DEBUG) console.log(msg); }
 
   // DOM
   const video = document.getElementById('scan-video');
@@ -100,6 +103,9 @@
 
   const BANDERAS = { arg: '🇦🇷', chl: '🇨🇱', ury: '🇺🇾', pry: '🇵🇾', per: '🇵🇪', bol: '🇧🇴', col: '🇨🇴', ecu: '🇪🇨', ven: '🇻🇪', bra: '🇧🇷' };
 
+  // ==========================================
+  // FUNCIONES DEL DNI NUEVO (PARCHE)
+  // ==========================================
   function datosDesdeIdentidad(id) {
     const apellido = id.apellido || '', nombre = id.nombre || '';
     const hoy = new Date();
@@ -109,14 +115,27 @@
       edad = hoy.getFullYear() - y - ((hoy.getMonth() + 1 < m || (hoy.getMonth() + 1 === m && hoy.getDate() < d)) ? 1 : 0);
     }
     return {
-      pais: 'ARG', paisNombre: 'Argentina', metodo: 'mrz', tipoDocumento: 'DNI (lectura del reverso)',
+      pais: 'ARG', paisNombre: 'Argentina', metodo: id.fuente === 'qr' ? 'qr' : 'mrz', tipoDocumento: 'DNI (lectura del reverso)',
+      tramite: id.tramite || null, ejemplar: id.ejemplar || null, fechaEmision: id.fechaEmision || null,
       dni: id.dni, numero: id.dni, numeroValido: /^\d{7,8}$/.test(id.dni || ''),
       apellido, nombre, nombreCompleto: `${apellido} ${nombre}`.trim(),
-      sexo: id.sexo, fechaNacimiento: id.fechaNacimiento, edad,
-      nacionalidad: id.nacionalidad, fechaVencimiento: id.fechaVencimiento,
+      sexo: id.sexo || null, fechaNacimiento: id.fechaNacimiento, edad,
+      nacionalidad: id.nacionalidad || 'ARGENTINA', fechaVencimiento: id.fechaVencimiento || null,
       vigente: id.fechaVencimiento ? new Date(id.fechaVencimiento + 'T23:59:59') >= hoy : null,
-      mrzVerificada: !!id.verificada, nombreTruncado: !!id.truncado
+      mrzVerificada: !!id.verificada, nombreTruncado: !!id.truncado, cruceQRMRZ: id.cruceMRZ == null ? null : id.cruceMRZ
     };
+  }
+
+  function combinarIdentidad(qr, ident) {
+    if (!qr) return ident || null;
+    const out = Object.assign({}, ident || {}, {
+      dni: qr.dni, apellido: qr.apellido, nombre: qr.nombre, truncado: false,
+      fechaNacimiento: qr.fechaNacimiento, tramite: qr.tramite, ejemplar: qr.ejemplar,
+      fechaEmision: qr.fechaEmision, fuente: 'qr'
+    });
+    out.cruceMRZ = ident && ident.dni ? (ident.dni === qr.dni && ident.fechaNacimiento === qr.fechaNacimiento) : null;
+    out.verificada = ident ? out.cruceMRZ === true : true;
+    return out;
   }
 
   function inyectarBotonDNINuevo() {
@@ -124,7 +143,7 @@
     if (!cont || document.getElementById('btn-dni-nuevo')) return;
     const b = document.createElement('button');
     b.type = 'button'; b.id = 'btn-dni-nuevo'; b.className = 'btn btn-secondary';
-    b.innerHTML = '<span>DNI nuevo: leer reverso</span>';
+    b.innerHTML = '<span>📄 DNI nuevo: leer reverso</span>';
     b.addEventListener('click', abrirReversoDNINuevo);
     cont.appendChild(b);
   }
@@ -135,6 +154,9 @@
     await abrirModalDomicilio();
   }
 
+  // ==========================================
+  // HELPERS GENERALES
+  // ==========================================
   function setStatus(texto, tipo = 'idle') {
     if (statusText) statusText.textContent = texto;
     if (statusPill) { statusPill.classList.remove('active', 'error'); if (tipo === 'active') statusPill.classList.add('active'); if (tipo === 'error') statusPill.classList.add('error'); }
@@ -240,6 +262,9 @@
     overlay.addEventListener('click', (e) => { if (e.target === overlay) cerrar(); });
   }
 
+  // ==========================================
+  // CÁMARA PRINCIPAL
+  // ==========================================
   async function evaluarAutoFlash(brillo) {
     if (!trackActual || !flashSoportado) return;
     if (brillo < BRILLO_UMBRAL_BAJO && !flashEncendido && !autoFlashActivo) {
@@ -356,9 +381,8 @@
   }
 
   function parsearSeguro(texto) {
-    try {
-      return paisSeleccionado === 'arg' ? DNIParser.parsear(texto) : ParsersMundo.parsear(paisSeleccionado, texto);
-    } catch (e) { return null; }
+    try { return paisSeleccionado === 'arg' ? DNIParser.parsear(texto) : ParsersMundo.parsear(paisSeleccionado, texto); } 
+    catch (e) { return null; }
   }
 
   function nitidez(c) {
@@ -555,7 +579,7 @@
   }
 
   // ==========================================
-  // LÓGICA DEL REVERSO (NUEVA)
+  // LÓGICA DEL REVERSO (MODAL)
   // ==========================================
   async function activarLinternaReverso() { if (!domicilioTrack || !domicilioFlashSoportado) return; try { await domicilioTrack.applyConstraints({ advanced: [{ torch: true }] }); domicilioFlashEncendido = true; if (domicilioFlashBtn) domicilioFlashBtn.classList.add('encendido'); } catch (e) {} }
   async function apagarLinternaReverso() { if (!domicilioTrack || !domicilioFlashEncendido) return; try { await domicilioTrack.applyConstraints({ advanced: [{ torch: false }] }); domicilioFlashEncendido = false; if (domicilioFlashBtn) domicilioFlashBtn.classList.remove('encendido'); } catch (e) {} }
@@ -711,9 +735,9 @@
 
     const campos = ['domicilio', 'lugarNacimiento', 'cuil', 'fechaVencimiento', 'nacionalidad'];
     const acum = {};
-    let raw = '', mrzOk = null, mejorCanvas = null, ident = null;
+    let raw = '', mrzOk = null, mejorCanvas = null, ident = null, qr = null;
     const completo = () => modoReversoNuevo
-      ? (ident && ident.dni && ident.apellido && acum.domicilio && acum.cuil)
+      ? ((qr || (ident && ident.dni && ident.apellido)) && acum.domicilio && acum.cuil)
       : (acum.domicilio && acum.cuil && acum.fechaVencimiento);
 
     if (!(await esperarVideoDomicilio())) {
@@ -721,7 +745,6 @@
       if (domicilioProgress) domicilioProgress.hidden = true; if (btnCapturarDomicilio) btnCapturarDomicilio.hidden = false;
       return;
     }
-    if (typeof subirResolucion === 'function') await subirResolucion();
     const capturar = () => (typeof capturarMasNitidoRecortado === 'function') ? capturarMasNitidoRecortado(2, 100) : capturarMasNitido(domicilioVideo, 2, 100);
 
     for (let intento = 1; intento <= MAX_INTENTOS && autoScanActivo && !completo(); intento++) {
@@ -729,8 +752,15 @@
       if (domicilioProgressFill) domicilioProgressFill.style.width = '0%';
       const c = await capturar();
       mejorCanvas = mejorCanvas || c;
+      
+      if (modoReversoNuevo && !qr && typeof QRDNINuevo !== 'undefined') {
+        if (domicilioProgressText) domicilioProgressText.textContent = `Leyendo el QR… (${intento}/${MAX_INTENTOS})`;
+        const rq = await QRDNINuevo.decodificar(c);
+        if (rq) { qr = rq.datos; mejorCanvas = c; }
+      }
+      
       try {
-        const contexto = { dni: (ultimoResultado && (ultimoResultado.dni || ultimoResultado.numero)) || (ident && ident.dni) };
+        const contexto = { dni: (ultimoResultado && (ultimoResultado.dni || ultimoResultado.numero)) || (ident && ident.dni) || (qr && qr.dni) };
         const res = await DomicilioOCR.leer(c, paisSeleccionado, (p) => {
           if (domicilioProgressFill) domicilioProgressFill.style.width = (p * 100) + '%';
         }, contexto);
@@ -755,7 +785,7 @@
     if (!autoScanActivo) return;
     autoScanActivo = false;
 
-    const hayIdentidad = modoReversoNuevo && ident && (ident.dni || ident.apellido);
+    const hayIdentidad = modoReversoNuevo && (qr || (ident && (ident.dni || ident.apellido)));
     if (!hayIdentidad && !campos.some(k => acum[k])) {
       if (domicilioProgress) domicilioProgress.hidden = true;
       if (btnCapturarDomicilio) btnCapturarDomicilio.hidden = false;
@@ -763,7 +793,7 @@
       return;
     }
 
-    ultimaIdentidad = hayIdentidad ? ident : null;
+    ultimaIdentidad = hayIdentidad ? combinarIdentidad(qr, ident) : null;
     detenerCamaraModal();
     if (domicilioPreview && mejorCanvas) { domicilioPreview.src = mejorCanvas.toDataURL('image/jpeg', 0.7); domicilioPreview.hidden = false; }
     if (domicilioVideo) domicilioVideo.hidden = true;
@@ -777,11 +807,15 @@
     
     mostrarDebugOCR(raw);
     const info = document.querySelector('.domicilio-info');
-    if (info && hayIdentidad) {
-      info.textContent = `${ident.apellido || '?'} ${ident.nombre || ''} · DNI ${ident.dni || '?'} · ${ident.verificada ? '✓ MRZ verificada' : '⚠ revisá los datos'}${ident.truncado ? ' · nombre cortado por la MRZ' : ''}`;
+    const u = ultimaIdentidad;
+    if (info && u) {
+      const estadoId = u.fuente === 'qr'
+        ? (u.cruceMRZ === true ? '✓ QR leído y coincide con la MRZ' : u.cruceMRZ === false ? '⚠ el QR no coincide con la MRZ: revisá' : '✓ QR leído')
+        : (u.verificada ? '✓ MRZ verificada' : '⚠ revisá los datos');
+      info.textContent = `${u.apellido || '?'} ${u.nombre || ''} · DNI ${u.dni || '?'} · ${estadoId}${u.truncado ? ' · nombre cortado por la MRZ' : ''}`;
     }
 
-    if (modoReversoNuevo && !(ident && ident.dni && ident.apellido)) mostrarToast('No se leyeron bien las líneas con < : probá de nuevo con más luz.', 'error');
+    if (modoReversoNuevo && !(u && u.dni && u.apellido)) mostrarToast('No se leyeron bien las líneas con < : probá de nuevo con más luz.', 'error');
     else if (!acum.domicilio) mostrarToast('No se leyó el domicilio: escribilo a mano o tocá Reintentar.', 'error');
     else if (acum.fechaVencimiento && mrzOk === false) mostrarToast('✓ Detectado · revisá el vencimiento', 'error');
     else mostrarToast('✓ Datos detectados', 'success');
@@ -830,6 +864,7 @@
     cerrarModalDomicilio();
   }
 
+  // EVENTOS
   if (btnCamara) btnCamara.addEventListener('click', iniciarCamara);
   if (btnRetryCamara) btnRetryCamara.addEventListener('click', iniciarCamara);
   if (btnRepetir) { btnRepetir.addEventListener('click', async () => { if (resultado) resultado.hidden = true; if (img) { img.hidden = true; img.src = ''; } if (video) video.hidden = false; btnRepetir.hidden = true; if (estado) { estado.textContent = 'Apuntá al código del documento.'; estado.classList.remove('ok', 'error'); } if (escaneoEstado) escaneoEstado.textContent = ''; await iniciarCamara(); }); }
