@@ -1101,6 +1101,60 @@
     procesandoDNINuevo = false;
   }
 
+  // ===== DNI nuevo: lectura del FRENTE por OCR =====
+  async function leerFrenteOCR() {
+    if (typeof FrenteDNI === 'undefined' || typeof DomicilioOCR === 'undefined') { mostrarToast('Falta cargar el lector del frente', 'error'); return; }
+    if (!stream || !video || !video.videoWidth) { mostrarToast('Primero iniciá la cámara y apuntá al frente del DNI', 'error'); return; }
+    detenerDeteccionDNINuevo();
+    if (stopScan) { stopScan(); stopScan = null; }
+    const btnF = document.getElementById('btn-dni-frente'); if (btnF) btnF.disabled = true;
+    setEstadoMarco('detectando'); setStatus('Leyendo el frente…');
+    if (escaneoEstado) escaneoEstado.textContent = '🔍 Leyendo el frente del DNI… mantené quieto';
+    let datosF = null, canvasF = null;
+    try {
+      for (let intento = 1; intento <= 2 && !datosF; intento++) {
+        canvasF = await capturarMasNitido(video, 3, 120);
+        const textos = await DomicilioOCR.leerTexto(canvasF, (p) => {
+          if (escaneoEstado) escaneoEstado.textContent = `🔍 Leyendo el frente… ${Math.round(p * 100)}% (${intento}/2)`;
+        });
+        datosF = FrenteDNI.parsearVarios(textos);
+      }
+    } catch (e) { console.warn('OCR frente:', e); }
+    if (btnF) btnF.disabled = false;
+    if (!datosF) {
+      setEstadoMarco('error'); setStatus('Sin datos', 'error');
+      if (escaneoEstado) escaneoEstado.textContent = '⚠ No se pudo leer el frente. Más luz, sin reflejos, todo el DNI dentro del marco.';
+      mostrarToast('No se pudo leer el frente. Probá de nuevo.', 'error');
+      iniciarEscaneoContinuo(); iniciarDeteccionDNINuevo();
+      return;
+    }
+    setEstadoMarco('ok'); animarCaptura();
+    ultimaFotoDataUrl = canvasF.toDataURL('image/jpeg', 0.8);
+    if (img) { img.src = ultimaFotoDataUrl; img.hidden = false; } if (video) video.hidden = true;
+    if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; } trackActual = null; if (zoomControl) zoomControl.hidden = true;
+    if (scanFrame) scanFrame.classList.remove('activo');
+    const id = Object.assign({ fuente: 'ocr', verificada: false }, datosF);
+    if (id.sexo === 'M') id.sexo = 'Masculino'; else if (id.sexo === 'F') id.sexo = 'Femenino';
+    const datos = datosDesdeIdentidad(id);
+    datos.metodo = 'ocr frente'; datos.tipoDocumento = 'DNI nuevo (frente, por OCR)'; datos.mrzVerificada = false;
+    render(datos);
+    if (estado) { estado.textContent = '✓ ' + (datos.nombreCompleto || datos.dni || 'Documento') + ' · verificá los datos'; estado.classList.remove('error'); estado.classList.add('ok'); }
+    const faltan = [!datos.dni && 'DNI', !datos.apellido && 'apellido', !datos.nombre && 'nombre', !datos.fechaNacimiento && 'nacimiento', !datos.sexo && 'sexo'].filter(Boolean);
+    if (escaneoEstado) escaneoEstado.textContent = faltan.length ? '⚠ No se leyó: ' + faltan.join(', ') + '. Completalo con "leer reverso".' : '✅ Frente leído por OCR: verificá los datos';
+    setStatus('Frente leído', 'active'); reproducirSonidoExito(); vibrarExito();
+    if (btnRepetir) btnRepetir.hidden = false;
+  }
+
+  function inyectarBotonFrente() {
+    const cont = document.querySelector('.camera-actions');
+    if (!cont || document.getElementById('btn-dni-frente')) return;
+    const b = document.createElement('button');
+    b.type = 'button'; b.id = 'btn-dni-frente'; b.className = 'btn btn-secondary';
+    b.innerHTML = '<span>DNI nuevo: leer frente</span>';
+    b.addEventListener('click', leerFrenteOCR);
+    cont.insertBefore(b, document.getElementById('btn-dni-nuevo') || null);
+  }
+
   if (btnCamara) btnCamara.addEventListener('click', iniciarCamara);
   if (btnRetryCamara) btnRetryCamara.addEventListener('click', iniciarCamara);
   if (btnRepetir) { btnRepetir.addEventListener('click', async () => { if (resultado) resultado.hidden = true; if (img) { img.hidden = true; img.src = ''; } if (video) video.hidden = false; btnRepetir.hidden = true; if (estado) { estado.textContent = 'Apuntá al código del documento.'; estado.classList.remove('ok', 'error'); } if (escaneoEstado) escaneoEstado.textContent = ''; await iniciarCamara(); }); }
@@ -1128,6 +1182,7 @@
 
   inicializarTema();
   inyectarBotonDNINuevo();
+  inyectarBotonFrente();
   actualizarContadorHistorial();
   inicializarSelectorPais();
 
