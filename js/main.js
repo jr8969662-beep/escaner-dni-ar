@@ -1,8 +1,8 @@
 (() => {
   'use strict';
 
-  const SUPABASE_URL = 'https://TU_SUPABASE_URL.supabase.co'; 
-  const SUPABASE_KEY = 'TU_SUPABASE_ANON_KEY'; 
+  const SUPABASE_URL = 'https://TU_SUPABASE_URL.supabase.co'; // <-- REEMPLAZAR
+  const SUPABASE_KEY = 'TU_SUPABASE_ANON_KEY'; // <-- REEMPLAZAR
   let supabaseClient = null;
   if (typeof supabase !== 'undefined') {
     supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
@@ -23,6 +23,9 @@
   const HINT_OK = 'Encajá el reverso del DNI en el marco';
   let monitorLuz = null, ultimoCambioLinterna = 0, noEncenderHasta = 0, linternaManual = false;
 
+  function log(msg) { if (DEBUG) console.log(msg); }
+
+  // DOM
   const video = document.getElementById('scan-video');
   const canvas = document.getElementById('scan-canvas');
   const img = document.getElementById('scan-img');
@@ -56,6 +59,7 @@
   const btnLimpiarHistorial = document.getElementById('btn-limpiar-historial');
   const historialLista = document.getElementById('historial-lista');
   const toast = document.getElementById('toast');
+  
   const focusReticle = document.getElementById('focus-reticle');
   const zoomControl = document.getElementById('zoom-control');
   const zoomSlider = document.getElementById('zoom-slider');
@@ -297,50 +301,9 @@
   }
 
   function iniciarEscaneoContinuo() {
-    if (stopScan) stopScan(); if (escaneoEstado) escaneoEstado.textContent = '🔍 Buscando código...'; setEstadoMarco('buscando');
+    if (stopScan) stopScan(); if (escaneoEstado) escaneoEstado.textContent = '🔍 Buscando código…'; setEstadoMarco('buscando');
     
-    stopScan = DNIScanner.escanearContinuo(
-      video, canvas, 
-      (texto) => exitoEscaneo(texto), 
-      async () => { 
-        // 🔥 SI NO ENCUENTRA CÓDIGO DE BARRAS, HACE OCR AUTOMÁTICO
-        if (escaneoEstado) escaneoEstado.textContent = 'No se encontró código. Usando OCR...'; 
-        setEstadoMarco('error'); 
-        setStatus('Usando OCR', 'active');
-        
-        try {
-          const c = document.createElement('canvas');
-          c.width = video.videoWidth; c.height = video.videoHeight;
-          c.getContext('2d').drawImage(video, 0, 0, c.width, c.height);
-          
-          const lectura = await DomicilioOCR.leer(c, paisSeleccionado);
-          const datosOcr = DNIParser.parsearUniversal(lectura.raw);
-          
-          if (datosOcr && (datosOcr.dni || datosOcr.apellido || datosOcr.nombre)) {
-            if (img) { img.src = c.toDataURL(); img.hidden = false; }
-            video.hidden = true;
-            detenerCamara();
-            render(datosOcr); 
-            if (estado) { estado.textContent = '✓ ' + (datosOcr.nombreCompleto || datosOcr.dni); estado.classList.remove('error'); estado.classList.add('ok'); }
-            if (escaneoEstado) escaneoEstado.textContent = '✅ Escaneo con OCR OK'; 
-            setStatus('Escaneo OK', 'active'); 
-            if (btnRepetir) btnRepetir.hidden = false; 
-            reproducirSonidoExito(); 
-            vibrarExito();
-          } else {
-            if (estado) { estado.textContent = '⚠️ No se pudo leer el documento'; estado.classList.add('error'); }
-            if (escaneoEstado) escaneoEstado.textContent = 'Acercate o mejorá la luz'; 
-            setStatus('Error', 'error'); 
-            if (btnRepetir) btnRepetir.hidden = false;
-          }
-        } catch (e) {
-          console.warn('Error OCR:', e);
-          if (estado) { estado.textContent = '⚠️ Error al leer'; estado.classList.add('error'); }
-          if (btnRepetir) btnRepetir.hidden = false;
-        }
-      }, 
-      { intervaloMs: 300, timeoutMs: 8000, anchoMax: 1280, usarROI: true, framesConfirmacion: 2, onBrillo: (brillo) => evaluarAutoFlash(brillo) }
-    );
+    stopScan = DNIScanner.escanearContinuo(video, canvas, (texto) => exitoEscaneo(texto), () => { if (escaneoEstado) escaneoEstado.textContent = '⏱ No se detectó. Acercate más.'; setEstadoMarco('error'); setStatus('Sin detección'); }, { intervaloMs: 300, timeoutMs: 20000, anchoMax: 1280, usarROI: true, framesConfirmacion: 2, onBrillo: (brillo) => evaluarAutoFlash(brillo) });
   }
 
   function esc(s) {
@@ -393,23 +356,60 @@
   }
 
   async function exitoEscaneo(texto) {
-    if (stopScan) { stopScan(); stopScan = null; } if (cameraHint) cameraHint.style.opacity = '0'; setEstadoMarco('ok'); animarCaptura();
-    if (flashEncendido && trackActual) { trackActual.applyConstraints({ advanced: [{ torch: false }] }).catch(() => {}); flashEncendido = false; autoFlashActivo = false; if (btnFlash) btnFlash.classList.remove('encendido'); }
+    if (stopScan) { stopScan(); stopScan = null; } 
+    if (cameraHint) cameraHint.style.opacity = '0'; 
+    setEstadoMarco('ok'); 
+    animarCaptura();
     
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.8); 
+    if (flashEncendido && trackActual) { 
+      trackActual.applyConstraints({ advanced: [{ torch: false }] }).catch(() => {}); 
+      flashEncendido = false; autoFlashActivo = false; 
+      if (btnFlash) btnFlash.classList.remove('encendido'); 
+    }
+    
+    let mejorCanvas = null;
+    let mejorScore = -1;
+    
+    for (let i = 0; i < 3; i++) {
+      const c = document.createElement('canvas');
+      c.width = video.videoWidth;
+      c.height = video.videoHeight;
+      c.getContext('2d').drawImage(video, 0, 0, c.width, c.height);
+      const score = nitidez(c);
+      if (score > mejorScore) {
+        mejorScore = score;
+        mejorCanvas = c;
+      }
+      await new Promise(r => setTimeout(r, 50)); 
+    }
+
+    const dataUrl = mejorCanvas ? mejorCanvas.toDataURL('image/jpeg', 0.8) : canvas.toDataURL('image/jpeg', 0.8);
     ultimaFotoDataUrl = dataUrl;
-    if (img) { img.src = dataUrl; img.hidden = false; } video.hidden = true;
-    if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; } trackActual = null; if (zoomControl) zoomControl.hidden = true;
-    await new Promise(r => setTimeout(r, 250)); if (scanFrame) scanFrame.classList.remove('activo');
     
-    const paisDelDocumento = detectarPaisDelTexto(texto); const paisElegidoNombre = nombrePaisDesdeCodigo(paisSeleccionado);
+    if (img) { img.src = dataUrl; img.hidden = false; } 
+    video.hidden = true;
+    if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; } 
+    trackActual = null; 
+    if (zoomControl) zoomControl.hidden = true;
+    
+    await new Promise(r => setTimeout(r, 250)); 
+    if (scanFrame) scanFrame.classList.remove('activo');
+    
+    const paisDelDocumento = detectarPaisDelTexto(texto); 
+    const paisElegidoNombre = nombrePaisDesdeCodigo(paisSeleccionado);
     
     if (paisDelDocumento && paisDelDocumento !== paisSeleccionado) {
-      const nd = nombrePaisDesdeCodigo(paisDelDocumento); setEstadoMarco('error');
+      const nd = nombrePaisDesdeCodigo(paisDelDocumento); 
+      setEstadoMarco('error');
       mostrarErrorDocumento('Documento incorrecto', `Elegiste <strong>${paisElegidoNombre}</strong> pero este documento parece ser de <strong>${nd}</strong>.<br><br>Cambiá el país en el selector de arriba y volvé a escanear.`);
       if (estado) { estado.textContent = `⚠️ Este documento es de ${nd}`; estado.classList.add('error'); estado.classList.remove('ok'); }
-      if (escaneoEstado) escaneoEstado.textContent = ''; setStatus('Documento incorrecto', 'error'); if (btnRepetir) btnRepetir.hidden = false;
-      destacarChipPais(paisDelDocumento); reproducirSonidoError(); vibrarError(); return;
+      if (escaneoEstado) escaneoEstado.textContent = ''; 
+      setStatus('Documento incorrecto', 'error'); 
+      if (btnRepetir) btnRepetir.hidden = false;
+      destacarChipPais(paisDelDocumento); 
+      reproducirSonidoError(); 
+      vibrarError(); 
+      return;
     }
     
     const datos = parsearSeguro(texto);
@@ -419,10 +419,21 @@
       if (paisDelDocumento) { const nd = nombrePaisDesdeCodigo(paisDelDocumento); mostrarErrorDocumento('Documento no reconocido', `No pudimos leer este documento como uno de ${paisElegidoNombre}. Parece ser de ${nd}.`); }
       else { mostrarErrorDocumento('Documento no reconocido', `No pudimos interpretar este código como un documento de ${paisElegidoNombre}.`); }
       if (estado) { estado.textContent = '⚠️ No se pudieron extraer datos'; estado.classList.add('error'); estado.classList.remove('ok'); }
-      if (escaneoEstado) escaneoEstado.textContent = 'Texto: ' + texto.substring(0, 60); setStatus('Sin datos', 'error'); if (btnRepetir) btnRepetir.hidden = false; reproducirSonidoError(); vibrarError(); return;
+      if (escaneoEstado) escaneoEstado.textContent = 'Texto: ' + texto.substring(0, 60); 
+      setStatus('Sin datos', 'error'); 
+      if (btnRepetir) btnRepetir.hidden = false; 
+      reproducirSonidoError(); 
+      vibrarError(); 
+      return;
     }
-    render(datos); if (estado) { estado.textContent = '✓ ' + (datos.nombreCompleto || datos.dni || datos.numero || 'Documento'); estado.classList.remove('error'); estado.classList.add('ok'); }
-    if (escaneoEstado) escaneoEstado.textContent = '✅ Escaneo OK'; setStatus('Escaneo OK', 'active'); if (btnRepetir) btnRepetir.hidden = false; reproducirSonidoExito(); vibrarExito();
+    
+    render(datos); 
+    if (estado) { estado.textContent = '✓ ' + (datos.nombreCompleto || datos.dni || datos.numero || 'Documento'); estado.classList.remove('error'); estado.classList.add('ok'); }
+    if (escaneoEstado) escaneoEstado.textContent = '✅ Escaneo OK'; 
+    setStatus('Escaneo OK', 'active'); 
+    if (btnRepetir) btnRepetir.hidden = false; 
+    reproducirSonidoExito(); 
+    vibrarExito();
   }
 
   function setTexto(id, valor) { const el = document.getElementById(id); if (!el) return; el.textContent = (valor === null || valor === undefined || valor === '') ? '—' : String(valor); el.classList.remove('ok', 'err'); }
@@ -509,30 +520,9 @@
         detenerCamara(); setStatus('Procesando imagen…'); if (escaneoEstado) escaneoEstado.textContent = '🔍 Analizando…';
         
         let texto = null;
-        try { texto = await DNIScanner.escanearImagen(imageEl); } catch (e) {}
+        try { texto = await DNIScanner.escanearImagen(imageEl); } catch (e) { log(e); }
 
-        if (!texto) {
-          // 🔥 Si no hay código, hace OCR automático
-          try {
-            const lectura = await DomicilioOCR.leer(imageEl, paisSeleccionado);
-            const datosOcr = DNIParser.parsearUniversal(lectura.raw);
-            if (datosOcr && (datosOcr.dni || datosOcr.apellido)) {
-              render(datosOcr);
-              if (estado) { estado.textContent = '✓ ' + (datosOcr.nombreCompleto || datosOcr.dni); estado.classList.remove('error'); estado.classList.add('ok'); }
-              if (escaneoEstado) escaneoEstado.textContent = '✅ Escaneo con OCR OK'; 
-              setStatus('Escaneo OK', 'active'); if (btnRepetir) btnRepetir.hidden = false; reproducirSonidoExito(); vibrarExito(); return;
-            }
-          } catch(err) {}
-          
-          if (estado) { estado.textContent = '⚠️ No se detectó código ni texto'; estado.classList.add('error'); } 
-          if (escaneoEstado) escaneoEstado.textContent = 'Probá con una imagen más nítida'; 
-          setStatus('Sin código', 'error'); 
-          if (btnRepetir) btnRepetir.hidden = false; 
-          reproducirSonidoError(); 
-          vibrarError(); 
-          return; 
-        }
-
+        if (!texto) { if (estado) { estado.textContent = '⚠️ No se detectó código'; estado.classList.add('error'); } if (escaneoEstado) escaneoEstado.textContent = 'Probá con una imagen más nítida'; setStatus('Sin código', 'error'); if (btnRepetir) btnRepetir.hidden = false; reproducirSonidoError(); vibrarError(); return; }
         const paisDelDocumento = detectarPaisDelTexto(texto); const paisElegidoNombre = nombrePaisDesdeCodigo(paisSeleccionado);
         if (paisDelDocumento && paisDelDocumento !== paisSeleccionado) { const nd = nombrePaisDesdeCodigo(paisDelDocumento); mostrarErrorDocumento('Documento incorrecto', `Elegiste <strong>${paisElegidoNombre}</strong> pero este documento parece ser de <strong>${nd}</strong>.`); if (estado) { estado.textContent = `⚠️ Este documento es de ${nd}`; estado.classList.add('error'); } setStatus('Documento incorrecto', 'error'); if (btnRepetir) btnRepetir.hidden = false; destacarChipPais(paisDelDocumento); reproducirSonidoError(); vibrarError(); return; }
         
@@ -560,9 +550,6 @@
     });
   }
 
-  // ==========================================
-  // LÓGICA DEL REVERSO
-  // ==========================================
   async function activarLinternaReverso() { if (!domicilioTrack || !domicilioFlashSoportado) return; try { await domicilioTrack.applyConstraints({ advanced: [{ torch: true }] }); domicilioFlashEncendido = true; if (domicilioFlashBtn) domicilioFlashBtn.classList.add('encendido'); } catch (e) {} }
   async function apagarLinternaReverso() { if (!domicilioTrack || !domicilioFlashEncendido) return; try { await domicilioTrack.applyConstraints({ advanced: [{ torch: false }] }); domicilioFlashEncendido = false; if (domicilioFlashBtn) domicilioFlashBtn.classList.remove('encendido'); } catch (e) {} }
   async function toggleLinternaReverso() { if (!domicilioTrack || !domicilioFlashSoportado) return; if (domicilioFlashEncendido) await apagarLinternaReverso(); else await activarLinternaReverso(); }
@@ -771,7 +758,6 @@
     render(ultimoResultado); mostrarToast(actualizados > 0 ? `✓ ${actualizados} campo(s) agregado(s)` : 'No había campos nuevos para agregar', 'success'); cerrarModalDomicilio();
   }
 
-  // EVENTOS
   if (btnCamara) btnCamara.addEventListener('click', iniciarCamara);
   if (btnRetryCamara) btnRetryCamara.addEventListener('click', iniciarCamara);
   if (btnRepetir) { btnRepetir.addEventListener('click', async () => { if (resultado) resultado.hidden = true; if (img) { img.hidden = true; img.src = ''; } if (video) video.hidden = false; btnRepetir.hidden = true; if (estado) { estado.textContent = 'Apuntá al código del documento.'; estado.classList.remove('ok', 'error'); } if (escaneoEstado) escaneoEstado.textContent = ''; await iniciarCamara(); }); }
