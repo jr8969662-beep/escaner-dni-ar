@@ -1,5 +1,6 @@
 /**
- * OCR del reverso del DNI argentino (Versión Rápida - 2 Pasadas)
+ * OCR del reverso del DNI argentino (Tesseract.js v5)
+ * Incluye lectura de MRZ completa (DNI nuevo).
  */
 
 const DomicilioOCR = (() => {
@@ -8,8 +9,9 @@ const DomicilioOCR = (() => {
   let DEBUG = false;
   const log = (...args) => { if (DEBUG) console.log(...args); };
 
-  const ANCHO_MAX = 1600; 
-  const ANCHO_MIN = 1200; 
+  const ANCHO_MAX = 2200;              
+  const ANCHO_MIN = 1500;              
+  const FRACCIONES_MRZ = [0.4];        
 
   const PARAMS_TEXTO = {
     tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZÁÉÍÓÚÑabcdefghijklmnopqrstuvwxyzáéíóúñ0123456789 .,-°ºª/()<>:',
@@ -23,15 +25,25 @@ const DomicilioOCR = (() => {
     tessedit_pageseg_mode: '6'
   };
 
+  const PARAMS_ZONA = {
+    tessedit_char_whitelist: '',
+    preserve_interword_spaces: '1',
+    tessedit_pageseg_mode: '6'
+  };
+
   let workerPromise = null;
   let progresoCb = null;
+  let etapaDesde = 0;
+  let etapaHasta = 1;
+
+  function etapa(desde, hasta) { etapaDesde = desde; etapaHasta = hasta; }
 
   function initWorker() {
     if (!workerPromise) {
       workerPromise = Tesseract.createWorker('spa', 1, {
         logger: (m) => {
           if (progresoCb && m.status === 'recognizing text') {
-            progresoCb(m.progress);
+            progresoCb(etapaDesde + m.progress * (etapaHasta - etapaDesde));
           }
         }
       }).catch((e) => { workerPromise = null; throw e; });
@@ -69,8 +81,7 @@ const DomicilioOCR = (() => {
     const h = Math.round(h0 * escala);
 
     const c = document.createElement('canvas');
-    c.width = w;
-    c.height = h;
+    c.width = w; c.height = h;
     const ctx = c.getContext('2d', { willReadFrequently: true });
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
@@ -82,8 +93,7 @@ const DomicilioOCR = (() => {
     const hist = new Uint32Array(256);
     for (let i = 0; i < d.length; i += 4) {
       const g = (0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]) | 0;
-      d[i] = g;
-      hist[g]++;
+      d[i] = g; hist[g]++;
     }
 
     const total = w * h;
@@ -102,18 +112,62 @@ const DomicilioOCR = (() => {
     return c;
   }
 
-  function recortar(c, desdeY, hastaY) {
-    const y1 = Math.round(c.height * desdeY);
-    const y2 = Math.round(c.height * hastaY);
-    const h = y2 - y1;
+  function recortarInferior(c, fraccion) {
+    const h = Math.round(c.height * fraccion);
     const r = document.createElement('canvas');
-    r.width = c.width;
-    r.height = h;
-    r.getContext('2d').drawImage(c, 0, y1, c.width, h, 0, 0, c.width, h);
+    r.width = c.width; r.height = h;
+    r.getContext('2d').drawImage(c, 0, c.height - h, c.width, h, 0, 0, c.width, h);
     return r;
   }
 
-  const CLASES = { A: '[A4ÁÀ]', E: '[E3ÉÈ]', I: '[I1LÍÌ]', L: '[L1I]', O: '[O0ÓÒ]', U: '[UÚÜ]', S: '[S5]', B: '[B8]', G: '[G6]', Z: '[Z2]' };
+  function recortarSuperior(c, fraccion) {
+    const h = Math.round(c.height * fraccion);
+    const r = document.createElement('canvas');
+    r.width = c.width; r.height = h;
+    r.getContext('2d').drawImage(c, 0, 0, c.width, h, 0, 0, c.width, h);
+    return r;
+  }
+
+  function umbralLocal(gris, w, h, radio, k) {
+    const ancho = w + 1;
+    const integral = new Float64Array(ancho * (h + 1));
+    for (let y = 0; y < h; y++) {
+      let fila = 0;
+      for (let x = 0; x < w; x++) {
+        fila += gris[y * w + x];
+        integral[(y + 1) * ancho + (x + 1)] = integral[y * ancho + (x + 1)] + fila;
+      }
+    }
+    const out = new Uint8ClampedArray(w * h);
+    for (let y = 0; y < h; y++) {
+      const y0 = Math.max(0, y - radio), y1 = Math.min(h, y + radio + 1);
+      for (let x = 0; x < w; x++) {
+        const x0 = Math.max(0, x - radio), x1 = Math.min(w, x + radio + 1);
+        const area = (x1 - x0) * (y1 - y0);
+        const suma = integral[y1 * ancho + x1] - integral[y0 * ancho + x1]
+                   - integral[y1 * ancho + x0] + integral[y0 * ancho + x0];
+        out[y * w + x] = gris[y * w + x] < (suma / area) * k ? 0 : 255;
+      }
+    }
+    return out;
+  }
+
+  function binarizarCanvas(c) {
+    const w = c.width, h = c.height;
+    const ctx = c.getContext('2d', { willReadFrequently: true });
+    const img = ctx.getImageData(0, 0, w, h), d = img.data;
+    const gris = new Uint8ClampedArray(w * h);
+    for (let i = 0, p = 0; i < d.length; i += 4, p++) gris[p] = d[i];
+    const bin = umbralLocal(gris, w, h, Math.max(15, Math.round(w / 60)), 0.85);
+    for (let i = 0, p = 0; i < d.length; i += 4, p++) d[i] = d[i + 1] = d[i + 2] = bin[p];
+    ctx.putImageData(img, 0, 0);
+    return c;
+  }
+
+  const CLASES = {
+    A: '[A4ÁÀ]', E: '[E3ÉÈ]', I: '[I1LÍÌ]', L: '[L1I]', O: '[O0ÓÒ]',
+    U: '[UÚÜ]', S: '[S5]', B: '[B8]', G: '[G6]', Z: '[Z2]'
+  };
   const tol = (palabras) => palabras.split(' ').map(p => [...p].map(ch => CLASES[ch] || ch).join('')).join('\\s*');
   const unir = (lista) => lista.map(x => tol(x)).join('|');
 
@@ -155,7 +209,7 @@ const DomicilioOCR = (() => {
 
   const PREFIJOS_CUIL = ['20', '23', '24', '27', '30', '33', '34'];
   const PESOS_CUIL = [5, 4, 3, 2, 7, 6, 5, 4, 3, 2];
-  
+
   function cuilValido(c) {
     const d = String(c).replace(/\D/g, '');
     if (d.length !== 11 || !PREFIJOS_CUIL.includes(d.slice(0, 2))) return false;
@@ -172,6 +226,7 @@ const DomicilioOCR = (() => {
     const dni = String(contexto.dni || '').replace(/\D/g, '');
     const dniPad = dni ? dni.padStart(8, '0') : '';
     const t = texto.toUpperCase();
+
     const buscar = (segmento, exigirDni) => {
       for (const m of segmento.matchAll(/\b(\d{2})[-\s.]?(\d{8})[-\s.]?(\d)\b/g)) {
         const c = `${m[1]}-${m[2]}-${m[3]}`;
@@ -181,8 +236,10 @@ const DomicilioOCR = (() => {
       }
       return null;
     };
+
     const i = t.search(new RegExp(L_CUIL, 'i'));
     const cercano = i >= 0 ? t.slice(i, i + 40).replace(/[OQDIL|ZSBG]/g, ch => A_DIGITO_CUIL[ch] || ch) : '';
+
     return (cercano && buscar(cercano, true)) || buscar(t, true) || (cercano && buscar(cercano, false)) || null;
   }
 
@@ -225,6 +282,7 @@ const DomicilioOCR = (() => {
   function extraerDesdeMRZ(texto) {
     const vacio = { fechaVencimiento: null, nacionalidad: null, mrzVerificada: null };
     if (!texto) return vacio;
+
     const lineas = texto.toUpperCase().split(/[\r\n]+/).map(l => l.replace(/[^A-Z0-9<]/g, '')).filter(l => l.length >= 20);
     const hallazgos = [];
     for (const l of lineas) {
@@ -236,7 +294,73 @@ const DomicilioOCR = (() => {
     return hallazgos.find(h => h.mrzVerificada) || hallazgos[0] || vacio;
   }
 
-  // LECTURA RÁPIDA (Solo 2 pasadas)
+  const A_LETRA_NOMBRE = { 0: 'O', 1: 'I', 2: 'Z', 4: 'A', 5: 'S', 8: 'B', 6: 'G' };
+
+  function anioCompleto(yy) {
+    return (yy > new Date().getFullYear() % 100 ? 1900 : 2000) + yy;
+  }
+
+  function extraerMRZCompleta(texto) {
+    const lineas = (texto || '').toUpperCase().split(/[\r\n]+/).map(l => l.replace(/[^A-Z0-9<]/g, '')).filter(l => l.length >= 15);
+
+    let l2 = null, m2 = null, l2orig = null;
+    for (const l of lineas) {
+      for (const cand of [l, repararLinea2(l)]) {
+        const m = cand && RE_MRZ.exec(cand);
+        if (m && +m[5] >= 1 && +m[5] <= 12 && +m[6] >= 1 && +m[6] <= 31) {
+          if (!m2 || (cand.length === 30 && m.index === 0)) { l2 = cand; m2 = m; l2orig = l; }
+        }
+      }
+    }
+    if (!m2) return null;
+    const [, nacim, dcNacim, sexoRaw, yy, mm, dd, dcVenc, pais] = m2;
+    const nac6 = l2.slice(m2.index, m2.index + 6);
+    const yyN = +nac6.slice(0, 2);
+
+    let dni = null, docOk = null;
+    const l1orig = lineas.find(l => l !== l2orig && /^[I1][D0<]ARG/.test(l));
+    if (l1orig) {
+      const a = [...l1orig];
+      for (let i = 5; i <= 14 && i < a.length; i++) a[i] = A_DIGITO[a[i]] || a[i];
+      const campo = a.slice(5, 14).join('');
+      dni = campo.replace(/</g, '').replace(/\D/g, '') || null;
+      docOk = String(digitoControl(campo)) === a[14];
+    }
+
+    let apellido = null, nombre = null, truncado = false;
+    const l3 = lineas.find(l => l !== l2orig && l !== l1orig && l.includes('<<') && (l.match(/\d/g) || []).length <= 2);
+    if (l3) {
+      const limpio = [...l3].map(ch => A_LETRA_NOMBRE[ch] || ch).join('');
+      const partes = limpio.split('<<');
+      apellido = partes[0].replace(/</g, ' ').trim() || null;
+      nombre = partes.slice(1).join(' ').replace(/</g, ' ').replace(/\s+/g, ' ').trim() || null;
+      truncado = limpio.length >= 30 && !limpio.endsWith('<');
+    }
+
+    const nacOk = String(digitoControl(nac6)) === dcNacim;
+    const vencOk = String(digitoControl(yy + mm + dd)) === dcVenc;
+    let compOk = null;
+    if (l1orig && l1orig.length === 30 && l2.length === 30 && m2.index === 0) {
+      const comp = l1orig.slice(5, 30) + l2.slice(0, 7) + l2.slice(8, 15) + l2.slice(18, 29);
+      compOk = String(digitoControl(comp)) === l2[29];
+    }
+    return {
+      dni, apellido, nombre, truncado,
+      sexo: sexoRaw === 'M' ? 'Masculino' : sexoRaw === 'F' ? 'Femenino' : 'X',
+      fechaNacimiento: `${anioCompleto(yyN)}-${nac6.slice(2, 4)}-${nac6.slice(4, 6)}`,
+      fechaVencimiento: `20${yy}-${mm}-${dd}`,
+      nacionalidad: NACIONALIDADES[pais] || pais,
+      verificada: nacOk && vencOk && docOk !== false,
+      checks: { documento: docOk, nacimiento: nacOk, vencimiento: vencOk, compuesto: compOk }
+    };
+  }
+
+  function puntajeIdentidad(i) {
+    if (!i) return -1;
+    return (i.verificada ? 100 : 0) + (i.dni ? 10 : 0) + (i.apellido ? 10 : 0) + (i.nombre ? 5 : 0);
+  }
+  function mejorIdentidad(a, b) { return puntajeIdentidad(b) > puntajeIdentidad(a) ? b : a; }
+
   async function leer(fuente, pais = 'arg', onProgress, contexto = {}) {
     void pais;
     progresoCb = typeof onProgress === 'function' ? onProgress : null;
@@ -245,30 +369,67 @@ const DomicilioOCR = (() => {
     const origen = await aElemento(fuente);
     const gris = preprocesar(origen);
 
-    // Pasada 1: Solo el pedazo de arriba (Domicilio y Lugar)
-    const zonaSuperior = recortar(gris, 0, 0.60);
+    etapa(0, 0.4);
     await w.setParameters(PARAMS_TEXTO);
-    const { data: { text: textArriba } } = await w.recognize(zonaSuperior);
-    
-    // Pasada 2: Solo el pedazo de abajo (MRZ)
-    const zonaInferior = recortar(gris, 0.60, 1);
-    await w.setParameters(PARAMS_MRZ);
-    const { data: { text: textAbajo } } = await w.recognize(zonaInferior);
+    const { data: { text } } = await w.recognize(gris);
+    log('📄 OCR crudo del reverso:\n' + text);
 
-    const mrz = extraerDesdeMRZ(textAbajo);
+    let mrz = extraerDesdeMRZ(text);
+    let ident = extraerMRZCompleta(text);
+    let textoMRZs = '';
+    const identCompleta = () => ident && ident.verificada && ident.dni && ident.apellido;
+    if (!mrz.mrzVerificada || !identCompleta()) {
+      await w.setParameters(PARAMS_MRZ);
+      for (let i = 0; i < FRACCIONES_MRZ.length; i++) {
+        etapa(0.4 + i * 0.15, 0.55 + i * 0.15);
+        const { data: { text: textoMRZ } } = await w.recognize(recortarInferior(gris, FRACCIONES_MRZ[i]));
+        log(`📄 OCR MRZ (${FRACCIONES_MRZ[i] * 100}% inferior):\n` + textoMRZ);
+        textoMRZs += `\n--- MRZ ${Math.round(FRACCIONES_MRZ[i] * 100)}% inferior ---\n` + textoMRZ;
+        const cand = extraerDesdeMRZ(textoMRZ);
+        if (cand.mrzVerificada || (!mrz.fechaVencimiento && cand.fechaVencimiento)) mrz = cand;
+        ident = mejorIdentidad(ident, extraerMRZCompleta(textoMRZ));
+        if (mrz.mrzVerificada && identCompleta()) break;
+      }
+      await w.setParameters(PARAMS_TEXTO);
+    }
+
+    let domicilio = extraerDomicilio(text);
+    let lugar = extraerLugarNacimiento(text);
+    let textoZonas = '';
+    if (!domicilio || !lugar) {
+      await w.setParameters(PARAMS_ZONA);
+      const variantes = [[0.4, true], [0.6, true]];
+      for (let i = 0; i < variantes.length && (!domicilio || !lugar); i++) {
+        const [fr, bin] = variantes[i];
+        etapa(0.7 + i * 0.1, 0.8 + i * 0.1);
+        let zona = recortarSuperior(gris, fr);
+        if (bin) zona = binarizarCanvas(zona);
+        const { data: { text: tz } } = await w.recognize(zona);
+        textoZonas += `\n--- zona ${Math.round(fr * 100)}%${bin ? ' binarizada' : ''} ---\n` + tz;
+        log('📄 OCR zona superior:\n' + tz);
+        domicilio = domicilio || extraerDomicilio(tz);
+        lugar = lugar || extraerLugarNacimiento(tz);
+      }
+      await w.setParameters(PARAMS_TEXTO);
+    }
 
     if (progresoCb) progresoCb(1);
 
     return {
-      raw: '--- ARRIBA ---\n' + textArriba + '\n--- ABAJO ---\n' + textAbajo,
-      domicilio: extraerDomicilio(textArriba),
-      lugarNacimiento: extraerLugarNacimiento(textArriba),
-      cuil: extraerCUIL(textArriba, contexto),
+      raw: text + textoMRZs + textoZonas,
+      identidad: ident,
+      domicilio,
+      lugarNacimiento: lugar,
+      cuil: extraerCUIL(text, contexto),
       fechaVencimiento: mrz.fechaVencimiento,
       nacionalidad: mrz.nacionalidad,
       mrzVerificada: mrz.mrzVerificada
     };
   }
 
-  return { leer, precargar, liberar, setDebug: (v) => { DEBUG = !!v; }, extraerDomicilio, extraerLugarNacimiento, extraerCUIL, extraerDesdeMRZ, cuilValido };
+  return {
+    leer, precargar, liberar, setDebug: (v) => { DEBUG = !!v; },
+    extraerDomicilio, extraerLugarNacimiento, extraerCUIL, extraerDesdeMRZ, cuilValido, umbralLocal,
+    extraerMRZCompleta, mejorIdentidad, digitoControl
+  };
 })();
