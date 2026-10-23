@@ -73,6 +73,25 @@ const DomicilioOCR = (() => {
     await w.setParameters(PARAMS_TEXTO);
   }
 
+  // Solo texto, para leer el FRENTE del DNI nuevo: dos pasadas (párrafo y texto disperso), sin whitelist
+  async function leerTexto(fuente, onProgress) {
+    progresoCb = typeof onProgress === 'function' ? onProgress : null;
+    const w = await initWorker();
+    const gris = preprocesar(await aElemento(fuente));
+    const textos = [];
+    const modos = ['6', '11'];
+    for (let i = 0; i < modos.length; i++) {
+      etapa(i / modos.length, (i + 1) / modos.length);
+      await w.setParameters({ tessedit_char_whitelist: '', preserve_interword_spaces: '1', tessedit_pageseg_mode: modos[i] });
+      const { data: { text } } = await w.recognize(gris);
+      textos.push(text);
+      log('📄 OCR frente (psm ' + modos[i] + '):\n' + text);
+    }
+    await w.setParameters(PARAMS_TEXTO);
+    if (progresoCb) progresoCb(1);
+    return textos;
+  }
+
   async function liberar() {
     if (!workerPromise) return;
     const p = workerPromise;
@@ -522,6 +541,7 @@ const DomicilioOCR = (() => {
 
   return {
     leer,
+    leerTexto,
     precargar,
     liberar,
     setDebug: (v) => { DEBUG = !!v; },
