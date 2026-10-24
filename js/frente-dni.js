@@ -115,7 +115,7 @@ const FrenteDNI = (() => {
         else { if (e.iso) todas.push(e.iso); const k = cola.shift(); if (k && e.iso && !por[k]) por[k] = e.iso; ultima = null; }
       });
     });
-    if (ordenValido(por) && (por.nac || por.emi || por.ven)) return ajustarVencimiento(por);
+    const porEtiqueta = ordenValido(por) && (por.nac || por.emi || por.ven) ? por : null;
     // 2) por lógica: emisión y vencimiento (mismo día y mes, 15 u 8 años), nacimiento = la más antigua
     const u = [...new Set(todas)].sort(), out = { nac: null, emi: null, ven: null };
     for (let i = 0; i < u.length && !out.emi; i++) for (let j = i + 1; j < u.length; j++) {
@@ -123,10 +123,14 @@ const FrenteDNI = (() => {
       if (u[i].slice(5) === u[j].slice(5) && (dy === 15 || dy === 8)) { out.emi = u[i]; out.ven = u[j]; break; }
     }
     const resto = u.filter((f) => f !== out.emi && f !== out.ven);
-    if (out.emi) { out.nac = resto.find((f) => f < out.emi) || null; return out; }
-    if (u.length >= 3) return ajustarVencimiento({ nac: u[0], emi: u[1], ven: u[2] });
-    if (u.length >= 1) out.nac = u[0];
-    return out;
+    if (out.emi) out.nac = resto.find((f) => f < out.emi) || null;
+    else if (u.length >= 3) { out.nac = u[0]; out.emi = u[1]; out.ven = u[2]; }
+    else if (u.length >= 1 && !porEtiqueta) out.nac = u[0];
+    if (!porEtiqueta) return ajustarVencimiento(out);
+    // lo leído por etiqueta manda; lo que falte se completa con la lógica si mantiene el orden nacimiento < emisión < vencimiento
+    const f = Object.assign({}, porEtiqueta);
+    ['nac', 'emi', 'ven'].forEach((k) => { if (!f[k] && out[k] && Object.values(f).indexOf(out[k]) < 0) { const p = Object.assign({}, f, { [k]: out[k] }); if (ordenValido(p)) f[k] = out[k]; } });
+    return ajustarVencimiento(f);
   }
 
   const PALABRAS_ETIQUETA = /(SEXO|SEX|NACIONAL|NATIONAL|DOCUMENT|APELLID|SURNAME|NOMBRE|NAME|FECHA|DATE|EJEMPLAR|BIRTH|ISSUE|EXPIR|REPUBLICA|MERCOSUR|REGISTRO|MINISTERIO|IDENTIDAD)/;
@@ -134,6 +138,11 @@ const FrenteDNI = (() => {
   function comoNombre(linea) {
     const letras = (linea.match(/[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]/g) || []).length, digitos = (linea.match(/\d/g) || []).length;
     if (letras >= 4 && digitos > 0 && digitos <= 2) linea = linea.replace(/0/g, 'O').replace(/1/g, 'I').replace(/5/g, 'S').replace(/8/g, 'B').replace(/6/g, 'G');
+    // "RAMlRO", "VELAZQUEz": palabras casi todas en mayúsculas con alguna letra confundida -> todo en mayúsculas
+    linea = linea.split(/\s+/).map((w) => {
+      const L = w.match(/[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]/g) || [], up = w.match(/[A-ZÁÉÍÓÚÜÑ]/g) || [];
+      return (L.length >= 4 && up.length / L.length >= 0.6) ? w.replace(/[l|]/g, 'I').toUpperCase() : w;
+    }).join(' ');
     // fuera las "palabras" de ruido: sin letras, o con minúsculas y cortas (e, sll, Ha...)
     const toks = linea.split(/\s+/).filter((w) => /[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]/.test(w) && !(/[a-záéíóúüñ]/.test(w) && w.length <= 3))
       .map((w) => w.replace(/^[^A-Za-zÁÉÍÓÚÜÑáéíóúüñ]+|[^A-Za-zÁÉÍÓÚÜÑáéíóúüñ]+$/g, ''));
@@ -145,20 +154,32 @@ const FrenteDNI = (() => {
     return t;
   }
 
+  function tieneEtiqueta(l, palabras, excluir) {
+    const toks = sinTildes(l).toUpperCase().split(/[^A-Z]+/).filter((t) => t.length >= 4);
+    if (excluir && toks.some((t) => excluir.some((p) => similitud(t, p) >= 0.75))) return false;
+    return toks.some((t) => palabras.some((p) => similitud(t, p) >= (p.length <= 4 ? 1 : 0.72)));
+  }
+  const ES_APELLIDO = (l) => tieneEtiqueta(l, ['APELLIDO', 'APELLIDOS', 'SURNAME']);
+  const ES_NOMBRE = (l) => tieneEtiqueta(l, ['NOMBRE', 'NOMBRES', 'NAME'], ['SURNAME', 'APELLIDO']);
+  const ES_FILA_SEXO = (l) => /\bSEXO\b|\bSEX\b|NACIONAL|NATIONAL|NACIMIENTO|BIRTH/.test(sinTildes(l).toUpperCase());
+
   function buscarNombres(lineas) {
     const plano = lineas.map((l) => sinTildes(l).toUpperCase());
-    const ini = plano.findIndex((l) => /SURNAME|URNAME|APELLID|PELLIDO/.test(l));
+    const ini = plano.findIndex((l, i) => ES_APELLIDO(lineas[i]));
     if (ini < 0) {
       // sin etiqueta: líneas en mayúsculas entre el encabezado "IDENTIDAD" y la fila de Sexo/Nacionalidad
       const cab = plano.findIndex((l) => /IDENTIDAD/.test(l));
-      const sx = plano.findIndex((l, i) => i > cab && /\bSEXO\b|\bSEX\b|NACIONAL|NATIONAL/.test(l));
-      if (cab < 0 || sx < 0) return { apellido: null, nombre: null };
-      const c = []; for (let i = cab + 1; i < sx; i++) { const n = comoNombre(lineas[i]); if (n) c.push(n); }
+      const sx = plano.findIndex((l, i) => i > cab && ES_FILA_SEXO(l));
+      if (sx < 0) return { apellido: null, nombre: null };
+      // sin encabezado: hasta 3 líneas con forma de nombre justo antes de la fila de Sexo
+      const desde = cab >= 0 ? cab + 1 : Math.max(0, sx - 6);
+      const c = []; for (let i = desde; i < sx; i++) { const n = comoNombre(lineas[i]); if (n) c.push(n); }
+      if (cab < 0 && c.length > 3) c.splice(0, c.length - 3);
       return { apellido: c[0] || null, nombre: c.slice(1).join(' ') || null };
     }
-    let fin = plano.findIndex((l, i) => i > ini && /\bSEXO\b|\bSEX\b|NACIONAL|NATIONAL|NACIMIENTO|BIRTH/.test(l));
+    let fin = plano.findIndex((l, i) => i > ini && ES_FILA_SEXO(l));
     if (fin < 0) fin = Math.min(lineas.length, ini + 8);
-    const lblNombre = plano.findIndex((l, i) => i > ini && i < fin && /\bNOMBRE\b|\bNAME\b|MBRE\/|\/NAME/.test(l));
+    const lblNombre = plano.findIndex((l, i) => i > ini && i < fin && (ES_NOMBRE(lineas[i]) || /MBRE\/|\/NAME/.test(l)));
     const tomar = (a, b) => { const r = []; for (let i = a; i < b; i++) { const n = comoNombre(lineas[i]); if (n) r.push(n); } return r; };
     // valor en la misma línea de la etiqueta ("Apellido/Surname PEREZ")
     const resto = (i) => { const m = /(?:SURNAME|APELLIDOS?)\s*[:\/]?\s*(.*)$/i.exec(lineas[i]); return m ? comoNombre(m[1].replace(/^\/?\s*SURNAME\s*/i, '')) : null; };
@@ -213,20 +234,38 @@ const FrenteDNI = (() => {
   }
 
   // Combina varias lecturas OCR: cada dato se decide por votación entre las lecturas (gana el que más se repite)
+  // Elige un nombre entre varias lecturas: agrupa las parecidas (SANCHEZ / SANCHES) y gana el grupo más votado;
+  // dentro del grupo, la escritura que más se repite.
+  function elegirNombre(cands) {
+    const v = cands.map(normalizarNombre).filter((x) => x && x.replace(/ /g, '').length >= 3);
+    if (!v.length) return null;
+    const grupos = [];
+    v.forEach((x) => {
+      const g = grupos.find((gr) => similitud(gr[0], x) >= 0.8);
+      if (g) g.push(x); else grupos.push([x]);
+    });
+    grupos.sort((a, b) => b.length - a.length);
+    const g = grupos[0], cuenta = {};
+    g.forEach((x) => { cuenta[x] = (cuenta[x] || 0) + 1; });
+    return Object.keys(cuenta).sort((a, b) => cuenta[b] - cuenta[a] || b.length - a.length)[0];
+  }
+
+  // Combina varias lecturas OCR: cada dato se decide por votación entre las lecturas (gana el que más se repite).
+  // textos.nombres = { apellido: [...], nombre: [...] } suma lecturas sueltas de las zonas de nombres.
   function parsearVarios(textos) {
+    const extra = (textos && textos.nombres) || { apellido: [], nombre: [] };
     const rs = (textos || []).map(parsear).filter(Boolean);
-    if (!rs.length) return null;
-    const cuenta = (r) => Object.keys(r).filter((k) => r[k]).length;
-    rs.sort((a, b) => cuenta(b) - cuenta(a));
+    if (!rs.length && !extra.apellido.length) return null;
     const out = {};
-    Object.keys(rs[0]).concat(['dni', 'apellido', 'nombre', 'sexo', 'nacionalidad', 'fechaNacimiento', 'fechaEmision', 'fechaVencimiento', 'ejemplar', 'tramite']).forEach((k) => {
-      if (k in out) return;
+    ['dni', 'sexo', 'nacionalidad', 'fechaNacimiento', 'fechaEmision', 'fechaVencimiento', 'ejemplar', 'tramite'].forEach((k) => {
       const c = new Map();
-      rs.forEach((r, i) => { if (r[k]) { const e = c.get(r[k]) || { n: 0, i }; e.n++; c.set(r[k], e); } });
-      let mejor = null, mv = null;
-      c.forEach((e, v) => { if (!mejor || e.n > mejor.n || (e.n === mejor.n && (String(v).length > String(mv).length))) { mejor = e; mv = v; } });
+      rs.forEach((r) => { if (r[k]) c.set(r[k], (c.get(r[k]) || 0) + 1); });
+      let mv = null, mn = 0;
+      c.forEach((n, v) => { if (n > mn || (n === mn && String(v).length > String(mv).length)) { mn = n; mv = v; } });
       out[k] = mv;
     });
+    out.apellido = elegirNombre(rs.map((r) => r.apellido).filter(Boolean).concat(extra.apellido.map(comoNombre).filter(Boolean)));
+    out.nombre = elegirNombre(rs.map((r) => r.nombre).filter(Boolean).concat(extra.nombre.map(comoNombre).filter(Boolean)));
     return Object.keys(out).filter((k) => out[k]).length >= 3 ? out : null;
   }
 
@@ -269,5 +308,5 @@ const FrenteDNI = (() => {
       (anioDe(r.fechaVencimiento) - anioDe(r.fechaEmision) === 15 || anioDe(r.fechaVencimiento) - anioDe(r.fechaEmision) === 8));
   }
 
-  return { parsear, parsearVarios, reconciliar, similitud, normalizarNombre, completo };
+  return { parsear, parsearVarios, reconciliar, similitud, normalizarNombre, completo, comoNombre, tieneEtiqueta };
 })();

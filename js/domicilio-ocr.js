@@ -92,35 +92,82 @@ const DomicilioOCR = (() => {
     return textos;
   }
 
-  // FRENTE del DNI nuevo: la imagen debe ser la tarjeta (recortada al marco). Pasadas: párrafo, texto disperso y dos zonas
-  // ampliadas (nombres; documento + fechas). Devuelve los textos para que FrenteDNI decida cada dato por votación.
+  // Palabras con su posición, sea cual sea el formato que devuelva Tesseract.js (words, blocks o TSV)
+  function palabrasDe(data) {
+    if (!data) return [];
+    if (Array.isArray(data.words) && data.words.length) return data.words.map((w) => ({ t: w.text, b: w.bbox }));
+    const out = [];
+    (data.blocks || []).forEach((bl) => (bl.paragraphs || []).forEach((p) => (p.lines || []).forEach((l) => (l.words || []).forEach((w) => out.push({ t: w.text, b: w.bbox })))));
+    if (out.length || typeof data.tsv !== 'string') return out;
+    data.tsv.split('\n').forEach((fila) => {
+      const c = fila.split('\t');
+      if (c[0] === '5' && c[11] && c[11].trim()) out.push({ t: c[11], b: { x0: +c[6], y0: +c[7], x1: +c[6] + +c[8], y1: +c[7] + +c[9] } });
+    });
+    return out;
+  }
+
+  const sinT = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase();
+  // ¿La palabra es la etiqueta Apellido/Surname o Nombre/Name? Devuelve cuánto correr la zona a la izquierda (en alturas de letra)
+  function tipoEtiqueta(t) {
+    const U = sinT(t);
+    if (/APELL|PELLID/.test(U)) return { k: 'apellido', izq: 0.4 };
+    if (/SURNAME|URNAME|SURNAM/.test(U)) return { k: 'apellido', izq: 6.5 };
+    if (/NOMBR|OMBRE/.test(U) && !/SUR/.test(U)) return { k: 'nombre', izq: 0.4 };
+    if (/^\W*\/?NAME\W*$/.test(U) || (/\/NAME/.test(U) && !/SUR/.test(U))) return { k: 'nombre', izq: 5 };
+    return null;
+  }
+
+  // FRENTE del DNI (viejo y nuevo). 1) texto disperso de la imagen completa + posición de las etiquetas;
+  // 2) se relee AMPLIADA la línea que está debajo de "Apellido" y de "Nombre" (ahí falla más el OCR);
+  // 3) una pasada más de párrafo. Corta apenas tiene todo. Devuelve los textos (+ .nombres) para votar.
   async function leerFrente(fuente, onProgress, suficiente) {
     progresoCb = typeof onProgress === 'function' ? onProgress : null;
     const w = await initWorker();
     const gris = preprocesar(await aElemento(fuente));
-    const zona = (x0, y0, x1, y1, esc) => {
-      const sx = Math.round(gris.width * x0), sy = Math.round(gris.height * y0);
-      const sw = Math.round(gris.width * (x1 - x0)), sh = Math.round(gris.height * (y1 - y0));
-      const c = document.createElement('canvas');
-      c.width = Math.round(sw * esc); c.height = Math.round(sh * esc);
-      const x = c.getContext('2d'); x.imageSmoothingQuality = 'high';
-      x.drawImage(gris, sx, sy, sw, sh, 0, 0, c.width, c.height);
-      return c;
-    };
-    const pasadas = [
-      { img: gris, psm: '6' },
-      { img: gris, psm: '11' },
-      { img: zona(0.32, 0.15, 0.86, 0.43, 2), psm: '6' },
-      { img: zona(0.32, 0.42, 0.96, 0.82, 2), psm: '6' }
-    ];
     const textos = [];
-    for (let i = 0; i < pasadas.length; i++) {
-      etapa(i / pasadas.length, (i + 1) / pasadas.length);
-      await w.setParameters({ tessedit_char_whitelist: '', preserve_interword_spaces: '1', tessedit_pageseg_mode: pasadas[i].psm });
-      const { data: { text } } = await w.recognize(pasadas[i].img);
-      textos.push(text);
-      log('📄 OCR frente pasada ' + (i + 1) + ':\n' + text);
-      if (typeof suficiente === 'function' && suficiente(textos)) break;   // ya está todo: se corta para no demorar
+    textos.nombres = { apellido: [], nombre: [] };
+    const listo = () => typeof suficiente === 'function' && suficiente(textos);
+    const setPsm = (psm) => w.setParameters({ tessedit_char_whitelist: '', preserve_interword_spaces: '1', tessedit_pageseg_mode: psm });
+
+    // 1) imagen completa, texto disperso, con posiciones
+    etapa(0, 0.45);
+    await setPsm('11');
+    const r1 = await w.recognize(gris, {}, { text: true, blocks: true });
+    textos.push(r1.data.text || '');
+    log('📄 OCR frente (disperso):\n' + r1.data.text);
+
+    // 2) zonas debajo de las etiquetas
+    const etiquetas = [];
+    palabrasDe(r1.data).forEach((p) => {
+      const e = p.b && tipoEtiqueta(p.t);
+      if (e && !etiquetas.some((x) => x.k === e.k)) etiquetas.push(Object.assign({ b: p.b }, e));
+    });
+    if (etiquetas.length) {
+      await setPsm('7');
+      for (let i = 0; i < etiquetas.length; i++) {
+        etapa(0.45 + i * 0.1, 0.55 + i * 0.1);
+        const e = etiquetas[i], h = Math.max(8, e.b.y1 - e.b.y0);
+        const x0 = Math.max(0, Math.round(e.b.x0 - e.izq * h)), x1 = Math.min(gris.width, Math.round(x0 + 26 * h));
+        const y0 = Math.round(e.b.y1 + 0.15 * h), y1 = Math.min(gris.height, Math.round(e.b.y1 + 2.4 * h));
+        if (x1 - x0 < 20 || y1 - y0 < 8) continue;
+        const esc = Math.max(1, Math.min(4, 48 / h));
+        const z = document.createElement('canvas');
+        z.width = Math.round((x1 - x0) * esc); z.height = Math.round((y1 - y0) * esc);
+        const zc = z.getContext('2d'); zc.imageSmoothingQuality = 'high';
+        zc.drawImage(gris, x0, y0, x1 - x0, y1 - y0, 0, 0, z.width, z.height);
+        const { data: { text } } = await w.recognize(z);
+        textos.nombres[e.k].push(text || '');
+        log('📄 zona ' + e.k + ': ' + text);
+      }
+    }
+
+    // 3) imagen completa como párrafo (si todavía falta algo)
+    if (!listo()) {
+      etapa(0.7, 1);
+      await setPsm('6');
+      const { data: { text } } = await w.recognize(gris);
+      textos.push(text || '');
+      log('📄 OCR frente (párrafo):\n' + text);
     }
     await w.setParameters(PARAMS_TEXTO);
     if (progresoCb) progresoCb(1);
