@@ -104,7 +104,10 @@ h1, h2 { margin: 0; }
 .status-pill.error .dot { background: var(--err); }
 
 /* ---------- Layout ---------- */
-.app-main { max-width: 880px; margin: 0 auto; padding: 16px; display: grid; gap: 16px; }
+.app-main { max-width: 880px; margin: 0 auto; padding: 16px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+/* sin esto, la fila de países (que no se corta) estiraba toda la página en el celular */
+.app-main > * { min-width: 0; }
+html, body { overflow-x: hidden; }
 .card {
   background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden;
 }
@@ -168,7 +171,7 @@ h1, h2 { margin: 0; }
 @keyframes reticulaEnfoque { 0% { opacity: 1; transform: scale(1.4); } 60% { opacity: 1; transform: scale(1); } 100% { opacity: 0; transform: scale(1); } }
 
 .camera-hint {
-  position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); max-width: 92%;
+  position: absolute; left: 50%; top: 10px; transform: translateX(-50%); max-width: 80%;
   padding: 6px 14px; border-radius: 999px; background: rgba(8, 14, 26, .78); border: 1px solid rgba(201, 162, 39, .5);
   color: #fff; font-size: 12px; font-weight: 600; letter-spacing: .03em; text-align: center; transition: opacity .3s; pointer-events: none;
 }
@@ -308,7 +311,7 @@ h1, h2 { margin: 0; }
 
 /* Pantallas grandes */
 @media (min-width: 720px) {
-  .app-main { grid-template-columns: 1fr; padding: 22px 16px; }
+  .app-main { grid-template-columns: minmax(0, 1fr); padding: 22px 16px; }
   .camera-viewport { aspect-ratio: 16 / 10; max-height: 520px; }
   .scan-frame { width: 60%; --h: 200px; }
 }

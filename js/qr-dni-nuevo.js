@@ -46,10 +46,13 @@ const QRDNINuevo = (() => {
   const pausa = () => new Promise(r => setTimeout(r, 0)); // deja respirar a la interfaz entre intentos
 
   // Zona del QR en el dorso (arriba a la derecha) y la tarjeta completa, en varias escalas
+  // El QR es muy denso: se lee mejor ampliando solo su zona, y en varias escalas (cada lector acierta en escalas distintas)
   const INTENTOS = [
-    { x: 0.55, y: 0.08, w: 0.45, h: 0.62, anchos: [1200, 1800] },
-    { x: 0, y: 0, w: 1, h: 1, anchos: [2400, 3200] }
+    { x: 0.6, y: 0.1, w: 0.4, h: 0.6, anchos: [1400, 1800, 2300] },
+    { x: 0.45, y: 0, w: 0.55, h: 0.8, anchos: [2000] },
+    { x: 0, y: 0, w: 1, h: 1, anchos: [2600] }
   ];
+  const ANCHOS_VIVO = [1400, 1800, 2300];
 
   // Para el video en vivo (la tarjeta puede estar en cualquier parte del cuadro): cuadro entero
   const INTENTOS_FRAME = [{ x: 0, y: 0, w: 1, h: 1, anchos: [1920, 2560] }];
@@ -77,6 +80,12 @@ const QRDNINuevo = (() => {
     if (typeof jsQR === 'undefined' || !canvas) return null;
     const lista = opciones.modo === 'frame' ? INTENTOS_FRAME : INTENTOS;
     let anchosFrame = null;
+    if (opciones.modo === 'vivo') {
+      // cámara en vivo con la imagen ya recortada al marco: zona del QR, una escala por vuelta (para no trabar la cámara)
+      llamadasFrame++;
+      if (detectorNativo) { const rn = await decodificarNativo(canvas); if (rn) return rn; if (detectorNativo && llamadasFrame % 3 !== 0) return null; }
+      return decodificarEn(canvas, [INTENTOS[0]], [ANCHOS_VIVO[llamadasFrame % ANCHOS_VIVO.length]], 'dontInvert');
+    }
     if (opciones.modo === 'frame') {
       llamadasFrame++;
       if (detectorNativo) {
@@ -86,10 +95,14 @@ const QRDNINuevo = (() => {
       }
       anchosFrame = [llamadasFrame % 2 ? 1920 : 2560];                // una sola escala por vuelta
     }
+    return decodificarEn(canvas, lista, opciones.anchos || anchosFrame, opciones.modo === 'frame' ? 'dontInvert' : 'attemptBoth');
+  }
+
+  async function decodificarEn(canvas, lista, anchosFijos, inversion) {
     for (const it of lista) {
       const sx = Math.round(canvas.width * it.x), sy = Math.round(canvas.height * it.y);
       const sw = Math.round(canvas.width * it.w), sh = Math.round(canvas.height * it.h);
-      for (const ancho of (opciones.anchos || anchosFrame || it.anchos)) {
+      for (const ancho of (anchosFijos || it.anchos)) {
         const esc = ancho / sw;
         const w = Math.round(sw * esc), h = Math.round(sh * esc);
         if (w * h > 9e6) continue;
@@ -101,7 +114,7 @@ const QRDNINuevo = (() => {
         ctx.imageSmoothingQuality = 'high';
         ctx.drawImage(canvas, sx, sy, sw, sh, 0, 0, w, h);
         const img = ctx.getImageData(0, 0, w, h);
-        const res = jsQR(img.data, w, h, { inversionAttempts: opciones.modo === 'frame' ? 'dontInvert' : 'attemptBoth' });
+        const res = jsQR(img.data, w, h, { inversionAttempts: inversion });
         if (res && res.data) {
           const datos = parsear(res.data);
           if (datos) {

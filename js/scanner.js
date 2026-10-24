@@ -13,13 +13,10 @@ const DNIScanner = (() => {
   if (zxingDisponible) {
     try {
       const hints = new Map();
+      // Solo PDF417 (DNI viejo y cédulas): con menos formatos ZXing es mucho más rápido y la cámara no se traba.
+      // Los QR los leen jsQR y el lector del DNI nuevo.
       hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
-        ZXing.BarcodeFormat.PDF_417, 
-        ZXing.BarcodeFormat.QR_CODE, 
-        ZXing.BarcodeFormat.CODE_128, 
-        ZXing.BarcodeFormat.CODE_39, 
-        ZXing.BarcodeFormat.DATA_MATRIX, 
-        ZXing.BarcodeFormat.AZTEC
+        ZXing.BarcodeFormat.PDF_417
       ]);
       hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
       zxingReader = new ZXing.BrowserMultiFormatReader(hints, { delayBetweenScanAttempts: 100, delayBetweenScanSuccess: 500 });
