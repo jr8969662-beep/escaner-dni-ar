@@ -1230,8 +1230,8 @@
       if (estable) { if (!estableDesdeMs) estableDesdeMs = ahora; } else estableDesdeMs = 0;
 
       // Sin código tras unos segundos con el DNI quieto: se prueba el frente del DNI nuevo por OCR
-      if (paisSeleccionado === 'arg' && detectorNuevoActivo && estableDesdeMs && ahora - estableDesdeMs > 1000 &&
-          ahora - camInicioMs > 2500 && ahora - ultimoIntentoFrenteMs > 6000 && intentosFrenteAuto < 6 &&
+      if (paisSeleccionado === 'arg' && detectorNuevoActivo && estableDesdeMs && ahora - estableDesdeMs > 600 &&
+          ahora - camInicioMs > 1500 && ahora - ultimoIntentoFrenteMs > 3500 && intentosFrenteAuto < 6 &&
           typeof FrenteDNI !== 'undefined' && typeof DomicilioOCR !== 'undefined' && DomicilioOCR.leerTexto) {
         intentosFrenteAuto++; ultimoIntentoFrenteMs = ahora;
         leerFrenteOCR({ auto: true });
@@ -1305,7 +1305,7 @@
     try {
       const intentos = auto ? 1 : 2;   // en automático, una sola vuelta: si falla se reintenta solo unos segundos después
       for (let intento = 1; intento <= intentos && !datosF; intento++) {
-        canvasF = await capturarFrenteRecortado(3, 120);
+        canvasF = await capturarFrenteRecortado(2, 80);
         const textos = await DomicilioOCR.leerFrente(canvasF, (p) => {
           if (escaneoEstado) escaneoEstado.textContent = `🔍 Leyendo el frente… ${Math.round(p * 100)}%`;
         }, (t) => FrenteDNI.completo(FrenteDNI.parsearVarios(t)));

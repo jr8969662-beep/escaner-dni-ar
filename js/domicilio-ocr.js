@@ -145,14 +145,24 @@ const DomicilioOCR = (() => {
     // 1) imagen completa, texto disperso, con posiciones
     etapa(0, 0.3);
     await setPsm('11');
-    const r1 = await w.recognize(grisF, {}, { text: true, blocks: true });
+    // (a menor resolución: las etiquetas son grandes y la pasada tarda la mitad; los datos se releen ampliados más abajo)
+    const kDesc = Math.min(1, 1700 / grisF.width);
+    let entradaDesc = grisF;
+    if (kDesc < 0.97) {
+      entradaDesc = document.createElement('canvas');
+      entradaDesc.width = Math.round(grisF.width * kDesc); entradaDesc.height = Math.round(grisF.height * kDesc);
+      const dc = entradaDesc.getContext('2d'); dc.imageSmoothingQuality = 'high';
+      dc.drawImage(grisF, 0, 0, entradaDesc.width, entradaDesc.height);
+    }
+    const r1 = await w.recognize(entradaDesc, {}, { text: true, blocks: true });
     textos.push(r1.data.text || '');
     log('📄 OCR frente (disperso):\n' + r1.data.text);
 
     // 2) zonas debajo de las etiquetas: nombres, fechas, número y trámite, releídos ampliados
     textos.zonas = { nac: [], emi: [], ven: [], doc: [], tramite: [] };
     const etiquetas = [];
-    palabrasDe(r1.data).forEach((p) => {
+    palabrasDe(r1.data).map((p) => (p.b && kDesc < 0.97)
+      ? { t: p.t, b: { x0: p.b.x0 / kDesc, y0: p.b.y0 / kDesc, x1: p.b.x1 / kDesc, y1: p.b.y1 / kDesc } } : p).forEach((p) => {
       const e = p.b && tipoEtiqueta(p.t);
       if (!e) return;
       // etiqueta en dos renglones ("Fecha de emisión/" + "Date of issue"): el dato está debajo del renglón de más abajo
@@ -164,7 +174,12 @@ const DomicilioOCR = (() => {
     });
     if (etiquetas.length) {
       await setPsm('7');
+      const prio = (e) => (e.k === 'apellido' ? 0 : e.k === 'nombre' ? 1 : 2);
+      etiquetas.sort((a, b) => prio(a) - prio(b));
+      const nNombres = etiquetas.filter((e) => prio(e) < 2).length;
       for (let i = 0; i < etiquetas.length; i++) {
+        // con los nombres ya releídos y todo lo demás coherente, no hace falta seguir (escaneo más corto)
+        if (i >= nNombres && i > 0 && listo()) { log('⏩ datos completos: se omiten las zonas restantes'); break; }
         etapa(0.3 + i * (0.2 / etiquetas.length), 0.3 + (i + 1) * (0.2 / etiquetas.length));
         const e = etiquetas[i], h = Math.max(8, e.b.y1 - e.b.y0);
         const x0 = Math.max(0, Math.round(e.b.x0 - e.izq * h)), x1 = Math.min(gris.width, Math.round(x0 + e.ancho * h));
@@ -809,12 +824,15 @@ const DomicilioOCR = (() => {
     const zDom = await ocr(cDom, PARAMS_ZONA, 0.5, 0.62, 'zona domicilio' + (aDom ? ' (por etiqueta)' : ''));
     const zLug = await ocr(cLug, PARAMS_ZONA_DISPERSA, 0.62, 0.72, 'zona lugar de nacimiento' + (aLug ? ' (por etiqueta)' : ''));
     const zCuil = await ocr(cCuil, PARAMS_ZONA, 0.72, 0.8, 'zona CUIL' + (aCuil ? ' (por etiqueta)' : ''));
-    const zTra = aTra ? await ocr(zonaAncla(aTra, -1, -0.4, 12, 2.8) || cCuil, PARAMS_ZONA, 0.8, 0.85, 'zona trámite (por etiqueta)') : zCuil;
+    const zTra = (aTra && !tramiteDeTexto(zCuil) && !tramiteDeTexto(text)) ? await ocr(zonaAncla(aTra, -1, -0.4, 12, 2.8) || cCuil, PARAMS_ZONA, 0.8, 0.85, 'zona trámite (por etiqueta)') : zCuil;
 
     // el domicilio es lo más difícil (letra chica sobre fondo con dibujos): se lee también con la luz normalizada
     // y se elige la lectura más "limpia"
-    const baseF = (() => { const f = preprocesar(origen, 'fondo'); return marco ? recortarRel(f, marco[0], marco[1], marco[2], marco[3], 1, 4000, 0) : f; })();
-    const cDomF = (aDom && marco === null && zonaAncla(aDom, -0.6, -0.5, 48, 2.9)) ? null : recortarRel(baseF, 0, 0, 0.9, 0.19, 3);
+    const baseFn = () => { const f = preprocesar(origen, 'fondo'); return marco ? recortarRel(f, marco[0], marco[1], marco[2], marco[3], 1, 4000, 0) : f; };
+    // si la primera lectura del domicilio ya es limpia (todas palabras válidas, sin letras sueltas), se evita la segunda
+    const domPrimera = [extraerDomicilio(zDom), domicilioDeZona(zDom)].filter(Boolean).sort((a, b) => puntajeDireccion(b) - puntajeDireccion(a))[0];
+    const limpia = domPrimera && domPrimera.split(/[\s,]+/).filter(Boolean).length >= 4 && puntajeDireccion(domPrimera) >= domPrimera.split(/[\s,]+/).filter(Boolean).length + 4;
+    const cDomF = limpia || (aDom && marco === null && zonaAncla(aDom, -0.6, -0.5, 48, 2.9)) ? null : recortarRel(baseFn(), 0, 0, 0.9, 0.19, 3);
     const zDomF = cDomF ? await ocr(cDomF, PARAMS_ZONA, 0.85, 0.9, 'zona domicilio (luz normalizada)') : '';
     const candDom = [extraerDomicilio(zDom), domicilioDeZona(zDom), extraerDomicilio(zDomF), domicilioDeZona(zDomF), extraerDomicilio(text)].filter(Boolean);
     let domicilio = candDom.sort((a, b) => puntajeDireccion(b) - puntajeDireccion(a))[0] || null;
