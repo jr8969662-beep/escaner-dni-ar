@@ -23,6 +23,12 @@ const DNIScanner = (() => {
     } catch (e) { zxingReader = null; }
   }
 
+  // Lector en un hilo aparte (no traba la cámara). Si no se puede crear, se usan ZXing/jsQR en el hilo principal.
+  let lectorHilo = null;
+  try { if (typeof Decodificador !== 'undefined' && Decodificador.soportado) lectorHilo = Decodificador.crear(); } catch (e) { lectorHilo = null; }
+  const hiloOk = () => !!(lectorHilo && lectorHilo.disponible());
+  let vueltaVariante = 0;
+
   // Función para saber si es el link del gobierno y descartarlo
   function esURLInvalida(txt) {
     return /^https?:\/\//i.test(txt) || /argentina\.gob\.ar/i.test(txt);
@@ -30,7 +36,8 @@ const DNIScanner = (() => {
 
   function extraerROI(canvasOriginal) {
     const w = canvasOriginal.width, h = canvasOriginal.height;
-    const roiW = Math.round(w * 0.85), roiH = Math.round(h * 0.65);
+    // zona amplia: con el DNI llenando el marco el código queda cerca del borde inferior (un recorte chico lo cortaba)
+    const roiW = Math.round(w * 0.94), roiH = Math.round(h * 0.9);
     const roiX = Math.round((w - roiW) / 2), roiY = Math.round((h - roiH) / 2);
     const roi = document.createElement('canvas');
     roi.width = roiW; roi.height = roiH;
@@ -54,19 +61,35 @@ const DNIScanner = (() => {
     return muestras > 0 ? suma / muestras : 0;
   }
 
-  async function escanearFrame(canvas, usarROI = true) {
+  // enVivo: si el lector del hilo aparte está ocupado se saltea el cuadro (no se acumulan pedidos ni se traba nada)
+  async function escanearFrame(canvas, usarROI = true, enVivo = false) {
     const canvasEscaneo = usarROI ? extraerROI(canvas) : canvas;
     const ctx = canvasEscaneo.getContext('2d', { willReadFrequently: true });
 
     if (barcodeDetector) {
       try {
         const codigos = await barcodeDetector.detect(canvasEscaneo);
-        if (codigos && codigos.length) {
-          for (const cod of codigos) {
-            if (!esURLInvalida(cod.rawValue)) return cod.rawValue;
-          }
-        }
+        for (const cod of codigos || []) if (!esURLInvalida(cod.rawValue)) return cod.rawValue;
       } catch (e) {}
+    }
+    if (hiloOk()) {
+      if (enVivo && !lectorHilo.libre()) return null;
+      // ZXing acierta o falla según el recorte y la escala: en cada cuadro se prueba una variante distinta
+      // (todo, mitad de abajo donde está el código, mitad de abajo ampliada, todo ampliado)
+      const variante = enVivo ? (vueltaVariante++ % 4) : 0;
+      let img = canvasEscaneo;
+      if (variante) {
+        const W = canvasEscaneo.width, H = canvasEscaneo.height;
+        const abajo = variante !== 3, esc = variante === 1 ? 1 : variante === 2 ? 1.5 : 1.3;
+        const sy = abajo ? Math.round(H * 0.45) : 0, sh = H - sy;
+        img = document.createElement('canvas');
+        img.width = Math.round(W * esc); img.height = Math.round(sh * esc);
+        const c2 = img.getContext('2d', { willReadFrequently: true }); c2.imageSmoothingQuality = 'high';
+        c2.drawImage(canvasEscaneo, 0, sy, W, sh, 0, 0, img.width, img.height);
+      }
+      const r = await lectorHilo.leer(img, ['pdf417', 'qr']);
+      if (r && r.texto && !esURLInvalida(r.texto)) return r.texto;
+      if (hiloOk()) return null;   // si el hilo se cayó, sigue con los lectores de siempre
     }
 
     if (zxingReader) {
@@ -93,7 +116,7 @@ const DNIScanner = (() => {
   function escanearContinuo(video, canvas, onDetected, onTimeout, opciones = {}) {
     const intervaloMs = opciones.intervaloMs || 300;
     const timeoutMs = opciones.timeoutMs || 20000;
-    const anchoMax = opciones.anchoMax || 1280;
+    const anchoMax = opciones.anchoMax || 1920;
     const usarROI = opciones.usarROI !== false;
     const onBrillo = opciones.onBrillo;
     const framesConfirmacion = opciones.framesConfirmacion || 2;
@@ -115,7 +138,7 @@ const DNIScanner = (() => {
             try { onBrillo(medirBrillo(canvas)); } catch (e) {}
           }
 
-          const texto = await escanearFrame(canvas, usarROI);
+          const texto = await escanearFrame(canvas, usarROI, true);
 
           if (texto && activo) {
             if (texto === ultimoTextoDetectado) {
@@ -149,6 +172,7 @@ const DNIScanner = (() => {
     
     let texto = await escanearFrame(canvas, true);
     if (texto) return texto;
+    if (hiloOk()) { for (let v = 1; v < 4; v++) { texto = await escanearFrame(canvas, true, true); if (texto) return texto; } }
     
     const c2 = document.createElement('canvas');
     c2.width = canvas.width * 2; c2.height = canvas.height * 2;

@@ -313,7 +313,7 @@
 
   function iniciarEscaneoContinuo() {
     if (stopScan) stopScan(); if (escaneoEstado) escaneoEstado.textContent = '🔍 Buscando código…'; setEstadoMarco('buscando');
-    stopScan = DNIScanner.escanearContinuo(video, canvas, (texto) => exitoEscaneo(texto), () => { if (escaneoEstado) escaneoEstado.textContent = '⏱ No se detectó. Acercá el DNI y mantenelo quieto dentro del marco.'; setEstadoMarco('error'); setStatus('Sin detección'); }, { intervaloMs: 300, timeoutMs: 3600000, anchoMax: 1280, usarROI: true, framesConfirmacion: 2, onBrillo: (brillo) => evaluarAutoFlash(brillo) });
+    stopScan = DNIScanner.escanearContinuo(video, canvas, (texto) => exitoEscaneo(texto), () => { if (escaneoEstado) escaneoEstado.textContent = '⏱ No se detectó. Acercá el DNI y mantenelo quieto dentro del marco.'; setEstadoMarco('error'); setStatus('Sin detección'); }, { intervaloMs: 300, timeoutMs: 3600000, anchoMax: 1920, usarROI: true, framesConfirmacion: 1, onBrillo: (brillo) => evaluarAutoFlash(brillo) });
   }
 
   function esc(s) {
@@ -375,6 +375,7 @@
 
   async function exitoEscaneo(texto) {
     detenerDeteccionDNINuevo();
+    if (typeof DomicilioOCR !== 'undefined' && DomicilioOCR.cancelarFrente) DomicilioOCR.cancelarFrente();   // el código manda
     if (stopScan) { stopScan(); stopScan = null; } if (cameraHint) cameraHint.style.opacity = '0'; setEstadoMarco('ok'); animarCaptura();
     if (flashEncendido && trackActual) { trackActual.applyConstraints({ advanced: [{ torch: false }] }).catch(() => {}); flashEncendido = false; autoFlashActivo = false; if (btnFlash) btnFlash.classList.remove('encendido'); }
     
@@ -976,7 +977,6 @@
   function guardarDomicilioDesdeModal() {
     if (!ultimoResultado && ultimaIdentidad) ultimoResultado = datosDesdeIdentidad(ultimaIdentidad);
     if (!ultimoResultado) return;
-    if (/ocr frente/.test(ultimoResultado.metodo || '')) { ultimoResultado.metodo = 'frente + reverso'; ultimoResultado.tipoDocumento = 'DNI (frente y reverso)'; }
     if (!ultimoResultado.tramite && tramiteReverso) ultimoResultado.tramite = tramiteReverso;
     if (ultimaIdentidad && typeof FrenteDNI !== 'undefined' && ultimoResultado.dni !== undefined) {
       const u = ultimaIdentidad, d = ultimoResultado;
@@ -994,6 +994,8 @@
         if (/ocr/.test(d.metodo || '')) { d.metodo = 'frente + reverso'; d.tipoDocumento = 'DNI (frente y reverso)'; }
       } else mostrarToast('El reverso parece de otro DNI: no se mezclaron los datos', 'error');
     }
+    // (el cambio de nombre del método va DESPUÉS de cruzar los datos: si no, el cruce frente/QR nunca corría)
+    if (/ocr frente/.test(ultimoResultado.metodo || '')) { ultimoResultado.metodo = 'frente + reverso'; ultimoResultado.tipoDocumento = 'DNI (frente y reverso)'; }
     const val = (el) => ((el && el.value) || '').trim();
 
     const domicilio = val(domInputDomicilio);
@@ -1093,6 +1095,7 @@
   async function exitoDNINuevo(r, frame, origen) {
     if (procesandoDNINuevo) return;
     procesandoDNINuevo = true;
+    if (typeof DomicilioOCR !== 'undefined' && DomicilioOCR.cancelarFrente) DomicilioOCR.cancelarFrente();   // corta la lectura del frente en curso
     detectorNuevoActivo = false;
     if (stopScan) { stopScan(); stopScan = null; }
     if (cameraHint) cameraHint.style.opacity = '0';
@@ -1154,10 +1157,12 @@
       datos = fusionarConFrente(datos);
       render(datos);
 
-      const faltan = [!datos.domicilio && 'domicilio', !datos.cuil && 'CUIL', !datos.fechaVencimiento && 'vencimiento'].filter(Boolean);
+      const faltan = [!datos.domicilio && 'domicilio', !datos.cuil && 'CUIL', !datos.fechaVencimiento && 'vencimiento', !datos.sexo && 'sexo'].filter(Boolean);
       if (escaneoEstado) escaneoEstado.textContent = faltan.length
-        ? '⚠ No se leyó: ' + faltan.join(', ') + '. Podés completarlo con "Leer reverso".'
+        ? '⚠ Falta: ' + faltan.join(', ') + '. Dejá el reverso frente a la cámara: se vuelve a leer solo.'
         : '✅ Escaneo completo';
+      // si faltó algo, se vuelve a leer el reverso solo (cámara del recuadro, hasta 3 intentos con imágenes nuevas)
+      if (faltan.length) setTimeout(() => { if (ultimoResultado === datos && modalDomicilio && modalDomicilio.hidden) abrirModalDomicilio(); }, 900);
       if (id.cruceMRZ === false) mostrarToast('El QR no coincide con la MRZ: revisá los datos', 'error');
     } catch (e) {
       console.warn('OCR del reverso:', e);
@@ -1301,7 +1306,7 @@
     const btnF = document.getElementById('btn-dni-frente'); if (btnF) btnF.disabled = true;
     setEstadoMarco('detectando'); setStatus('Leyendo el frente…');
     if (escaneoEstado) escaneoEstado.textContent = auto ? '🔍 DNI detectado: leyendo el frente… mantené quieto' : '🔍 Leyendo el frente del DNI… mantené quieto';
-    let datosF = null, canvasF = null, textosCrudos = [];
+    let datosF = null, canvasF = null, textosCrudos = [], cancelada = false;
     try {
       const intentos = auto ? 1 : 2;   // en automático, una sola vuelta: si falla se reintenta solo unos segundos después
       for (let intento = 1; intento <= intentos && !datosF; intento++) {
@@ -1309,11 +1314,13 @@
         const textos = await DomicilioOCR.leerFrente(canvasF, (p) => {
           if (escaneoEstado) escaneoEstado.textContent = `🔍 Leyendo el frente… ${Math.round(p * 100)}%`;
         }, (t) => FrenteDNI.completo(FrenteDNI.parsearVarios(t)));
+        if (textos && textos.cancelado) { cancelada = true; break; }
         datosF = FrenteDNI.parsearVarios(textos);
         textosCrudos = textos;
       }
     } catch (e) { console.warn('OCR frente:', e); }
     if (btnF) btnF.disabled = false;
+    if (cancelada) return;   // se leyó un código mientras tanto: manda el código
     // ¿Es el reverso? (tiene las líneas con <<<): se pasa directo a leer el reverso en alta resolución
     if (!datosF && stream && ultimoResultado === resultadoPrevio && /[I1][D0O]ARG|<<<</.test(textosCrudos.join('\n').toUpperCase().replace(/\s/g, ''))) {
       if (escaneoEstado) escaneoEstado.textContent = '🔍 Es el reverso: leyendo QR, domicilio y CUIL…';
@@ -1374,9 +1381,18 @@
       if (r.dni && d.dni && r.dni !== d.dni && FrenteDNI.similitud(r.dni, d.dni) < 0.75) return;   // no es el mismo documento
       let n = 0;
       const emi = aISO(d.fechaEmision || '') || r.fechaEmision;
-      if (!d.fechaVencimiento && emi && r.fechaVencimiento) {
-        const dy = +r.fechaVencimiento.slice(0, 4) - +emi.slice(0, 4);
-        if (r.fechaVencimiento.slice(5) !== emi.slice(5) || (dy !== 15 && dy !== 8)) r.fechaVencimiento = null;   // lectura dudosa: mejor vacío
+      if (!d.fechaVencimiento && emi) {
+        // El vencimiento es la fecha de emisión + 15 años (u 8): del OCR alcanza con leer bien el AÑO;
+        // día y mes salen de la emisión, que vino exacta en el código de barras.
+        const ey = +emi.slice(0, 4);
+        let anio = null;
+        if (r.fechaVencimiento) { const dy = +r.fechaVencimiento.slice(0, 4) - ey; if (dy === 15 || dy === 8) anio = +r.fechaVencimiento.slice(0, 4); }
+        if (!anio) {
+          const todo = (Array.isArray(textos) ? textos : []).concat(Object.values(textos.zonas || {}).flat()).join('\n');
+          const hay = [ey + 15, ey + 8].filter((y) => new RegExp('(?<!\\d)' + y + '(?!\\d)').test(todo));
+          if (hay.length === 1) anio = hay[0];
+        }
+        r.fechaVencimiento = anio ? anio + emi.slice(4) : null;   // lectura dudosa: mejor vacío
       }
       ['fechaVencimiento', 'nacionalidad', 'tramite', 'ejemplar', 'fechaEmision', 'apellido', 'nombre'].forEach((k) => { if (!d[k] && r[k]) { d[k] = r[k]; n++; } });
       if (!d.sexo && r.sexo) { d.sexo = r.sexo === 'M' ? 'Masculino' : r.sexo === 'F' ? 'Femenino' : r.sexo; n++; }

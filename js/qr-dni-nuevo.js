@@ -52,7 +52,7 @@ const QRDNINuevo = (() => {
     { x: 0.45, y: 0, w: 0.55, h: 0.8, anchos: [2000] },
     { x: 0, y: 0, w: 1, h: 1, anchos: [2600] }
   ];
-  const ANCHOS_VIVO = [1400, 1800, 2300];
+  const ANCHOS_VIVO = [1200, 1600, 2000];
 
   // Para el video en vivo (la tarjeta puede estar en cualquier parte del cuadro): cuadro entero
   const INTENTOS_FRAME = [{ x: 0, y: 0, w: 1, h: 1, anchos: [1920, 2560] }];
@@ -74,10 +74,69 @@ const QRDNINuevo = (() => {
     return null;
   }
 
+  // Lector en un hilo aparte (Web Worker): jsQR + ZXing sin trabar la cámara. Si no hay, se usa jsQR acá mismo.
+  let lectorHilo = null;
+  try { if (typeof Decodificador !== 'undefined' && Decodificador.soportado) lectorHilo = Decodificador.crear(); } catch (e) { lectorHilo = null; }
+  const hiloOk = () => !!(lectorHilo && lectorHilo.disponible());
+
+  // Esquinas del QR a partir de lo que devuelve el lector (jsQR da las 4 esquinas; ZXing, el centro de los 3 cuadrados)
+  function esquinasDe(r) {
+    const p = r.puntos || [];
+    if (r.esquinas && p.length >= 4) return { tl: p[0], tr: p[1], br: p[2], bl: p[3] };
+    if (p.length >= 3) {
+      const [bl, tl, tr] = p, br = { x: tr.x + bl.x - tl.x, y: tr.y + bl.y - tl.y };
+      const cx = (tl.x + br.x) / 2, cy = (tl.y + br.y) / 2, k = 1.09;   // de centro de los cuadrados a borde del QR
+      const ex = (q) => ({ x: cx + (q.x - cx) * k, y: cy + (q.y - cy) * k });
+      return { tl: ex(tl), tr: ex(tr), br: ex(br), bl: ex(bl) };
+    }
+    return null;
+  }
+
+  async function decodificarEnHilo(canvas, lista, anchosFijos, enVivo) {
+    for (const it of lista) {
+      const sx = Math.round(canvas.width * it.x), sy = Math.round(canvas.height * it.y);
+      const sw = Math.round(canvas.width * it.w), sh = Math.round(canvas.height * it.h);
+      for (const ancho of (anchosFijos || it.anchos)) {
+        if (enVivo && !lectorHilo.libre()) return null;
+        const esc = Math.min(ancho, 2600) / sw;
+        const w = Math.round(sw * esc), h = Math.round(sh * esc);
+        if (w * h > 7e6) continue;
+        const c = document.createElement('canvas');
+        c.width = w; c.height = h;
+        const ctx = c.getContext('2d', { willReadFrequently: true });
+        ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(canvas, sx, sy, sw, sh, 0, 0, w, h);
+        const r = await lectorHilo.leer(c, ['qr'], 8000);
+        if (!hiloOk()) return undefined;   // el hilo se cayó: que siga el lector de siempre
+        const datos = r && parsear(r.texto);
+        if (datos) {
+          const u = esquinasDe(r), mp = (q) => ({ x: sx + q.x / esc, y: sy + q.y / esc });
+          return { texto: r.texto, datos, ubicacion: u ? { tl: mp(u.tl), tr: mp(u.tr), br: mp(u.br), bl: mp(u.bl) } : null };
+        }
+      }
+    }
+    return null;
+  }
+
   // opciones.modo === 'frame' -> busca en todo el cuadro (cámara en vivo). Por defecto asume tarjeta encuadrada.
   // opciones.anchos -> anchos de trabajo en px (para fotos subidas conviene el tamaño original).
   async function decodificar(canvas, opciones = {}) {
-    if (typeof jsQR === 'undefined' || !canvas) return null;
+    if (!canvas) return null;
+    if (hiloOk()) {
+      llamadasFrame++;
+      if (opciones.modo === 'vivo' || opciones.modo === 'frame') {
+        if (detectorNativo) { const rn = await decodificarNativo(canvas); if (rn) return rn; }
+        const lista = opciones.modo === 'frame' ? INTENTOS_FRAME : [INTENTOS[0]];
+        const anchos = opciones.modo === 'frame' ? [1920] : [ANCHOS_VIVO[llamadasFrame % ANCHOS_VIVO.length]];
+        const r = await decodificarEnHilo(canvas, lista, anchos, true);
+        if (r !== undefined) return r;
+      } else {
+        if (detectorNativo) { const rn = await decodificarNativo(canvas); if (rn) return rn; }
+        const r = await decodificarEnHilo(canvas, INTENTOS, opciones.anchos || null, false);
+        if (r !== undefined) return r;
+      }
+    }
+    if (typeof jsQR === 'undefined') return null;
     const lista = opciones.modo === 'frame' ? INTENTOS_FRAME : INTENTOS;
     let anchosFrame = null;
     if (opciones.modo === 'vivo') {
