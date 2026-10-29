@@ -61,3 +61,8 @@ cd escaner-dni-ar
 
 - Los datos del DNI son personales (Ley 25.326). Si se activa Supabase: usar un bucket **privado**, RLS y login para el panel `admin.html`, pedir consentimiento y definir cuánto tiempo se conservan.
 - Nunca subir al repositorio fotos ni datos reales de documentos (ni siquiera de prueba): usar datos ficticios.
+
+## Modelo OCR-B para las líneas MRZ
+
+`tessdata/ocrb_int.traineddata` es el modelo OCR-B de [Shreeshrii/tessdata_ocrb](https://github.com/Shreeshrii/tessdata_ocrb)
+(ajuste fino de `tessdata_best/eng` de Tesseract, licencia Apache 2.0). Se usa solo para leer las líneas `<<<` del reverso.

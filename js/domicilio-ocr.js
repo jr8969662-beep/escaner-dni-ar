@@ -68,8 +68,45 @@ const DomicilioOCR = (() => {
     return workerPromise;
   }
 
+  // Segundo motor, solo para las líneas <<< (MRZ): modelo entrenado con la letra OCR-B de los documentos
+  // (tessdata/ocrb_int.traineddata, 1,4 MB). Lee mucho mejor los números que el modelo en español y, como es otro
+  // motor, trabaja AL MISMO TIEMPO que la lectura del domicilio (el reverso tarda menos). Si no carga, se usa el de siempre.
+  let workerMRZPromise = null;
+  function initWorkerMRZ() {
+    if (!workerMRZPromise) {
+      workerMRZPromise = (async () => {
+        const langPath = new URL('tessdata', location.href).href;
+        const wm = await Tesseract.createWorker('ocrb_int', 1, { langPath, gzip: false });
+        await wm.setParameters(PARAMS_MRZ);
+        return wm;
+      })().catch((e) => { log('MRZ: sin modelo OCR-B (' + e + ')'); return null; });
+    }
+    return workerMRZPromise;
+  }
+
+  // el motor de la MRZ se usa de a uno (lo comparten la lectura del reverso y la detección rápida)
+  let colaMRZ = Promise.resolve();
+  function enColaMRZ(fn) { const p = colaMRZ.then(fn, fn); colaMRZ = p.catch(() => {}); return p; }
+
+  // ¿La cámara está mostrando el REVERSO? Lectura rápida (menos de 1 s) solo de la franja de abajo, con el motor OCR-B:
+  // si aparecen las líneas <<< se pasa directo a leer el reverso, sin esperar la lectura del frente.
+  async function pareceReverso(fuente) {
+    const wm = await initWorkerMRZ();
+    if (!wm || !fuente || !fuente.width) return null;
+    return enColaMRZ(async () => {
+      // franja de las líneas <<< (con el margen del recorte de la cámara) y con la luz normalizada, que es como mejor lee el OCR-B
+      const c = await preprocesar(recortarRel(fuente, 0, 0.55, 1, 0.97, 1, 1500, 8), 'fondo');
+      const { data: { text } } = await wm.recognize(c);
+      const U = String(text || '').toUpperCase().replace(/\s/g, '');
+      const es = /[I1][D0O]ARG\d/.test(U) || (U.match(/</g) || []).length >= 12;
+      log('👀 ¿reverso? ' + (es ? 'sí' : 'no') + ' · ' + U.slice(0, 60));
+      return es;
+    });
+  }
+
   // Carga el motor y el idioma en segundo plano (llamarlo al abrir el modal, antes de capturar)
   async function precargar() {
+    // (el motor OCR-B se carga recién al leer un reverso: cargarlo antes le quitaba velocidad a la lectura del frente)
     const w = await initWorker();
     await w.setParameters(PARAMS_TEXTO);
   }
@@ -171,6 +208,10 @@ const DomicilioOCR = (() => {
     textos.push(r1.data.text || '');
     log('📄 OCR frente (disperso):\n' + r1.data.text);
     if (cancelado()) { await w.setParameters(PARAMS_TEXTO); textos.cancelado = true; return textos; }
+    // ¿Es el REVERSO (líneas IDARG / <<<)? No se sigue leyendo como frente: se avisa enseguida (ahorra varios segundos)
+    if (/[I1][D0O]ARG|<<<</.test(String(r1.data.text || '').toUpperCase().replace(/\s/g, ''))) {
+      await w.setParameters(PARAMS_TEXTO); textos.esReverso = true; return textos;
+    }
 
     // 2) zonas debajo de las etiquetas: nombres, fechas, número y trámite, releídos ampliados
     textos.zonas = { nac: [], emi: [], ven: [], doc: [], tramite: [], ejemplar: [], fila: [] };
@@ -389,6 +430,19 @@ const DomicilioOCR = (() => {
     return c;
   }
 
+  function rotar(el, ang) {
+    const w0 = el.videoWidth || el.naturalWidth || el.width, h0 = el.videoHeight || el.naturalHeight || el.height;
+    const c = document.createElement('canvas'); c.width = h0; c.height = w0;
+    const x = c.getContext('2d'); x.translate(c.width / 2, c.height / 2); x.rotate(ang * Math.PI / 180); x.drawImage(el, -w0 / 2, -h0 / 2);
+    return c;
+  }
+  function escalarA(el, ancho) {
+    const k = Math.min(1, ancho / el.width), c = document.createElement('canvas');
+    c.width = Math.round(el.width * k); c.height = Math.round(el.height * k);
+    const x = c.getContext('2d'); x.imageSmoothingQuality = 'high'; x.drawImage(el, 0, 0, c.width, c.height);
+    return c;
+  }
+
   // Recorte relativo (fracciones de la imagen) y ampliado, para releer letra chica
   function recortarRel(c, x0, y0, x1, y1, esc, anchoMax = 2400, pad = 16) {
     const sx = Math.max(0, Math.round(c.width * x0)), sy = Math.max(0, Math.round(c.height * y0));
@@ -551,9 +605,15 @@ const DomicilioOCR = (() => {
     s = s.replace(/\s-\s?8\s(?=[A-Z]{2,}\s)/g, ' - B° ');                              // "DPTO B - 8 TRES", "455 -8 EL"
     s = s.replace(/\bB\s?[*º°'"´`:;”“’‘](?=\s|[A-Z])/g, 'B° ');                         // "B*", "Bº", "B:" -> "B°"
     s = s.replace(/(^|\s-\s)B\s(?=[A-Z]{3})/g, '$1B° ');                             // "- B JUAN" -> "- B° JUAN"
+    s = s.replace(/\bB8[*°º"”']?(?=\s)/g, 'B°').replace(/(\d\s)8[*"”](?=\s[A-Z])/g, '$1B°');   // "B8*", "401 8” CIUDAD"
+    s = s.replace(/(\d{2,}\s)B\s(?=[A-Z]{3,}\s)/g, '$1B° ');                            // "401 B CIUDAD" (el ° no se leyó)
+    s = s.replace(/(^|\s-\s)V\s(?=[A-Z]{3})/g, '$1Vª ');                              // "V BEBA" (Villa) -> "Vª BEBA"
     s = s.replace(/\bN\s?[*º°'"´`](?=\s|\d)/g, 'N° ').replace(/\bV\s?[*°º](?=\s|[A-Z])/g, 'Vª ');
     s = s.replace(/\b(?:LI|IL|L1|1L|I1|1I)(?=\s*-|\s*$)/g, 'II');                     // "PABLO LI -" -> "PABLO II -"
+    // "JUAN PABLO 11 -" -> "JUAN PABLO II -" (número romano después de un nombre, no después de CALLE, MZA, LOTE...)
+    s = s.replace(/\b([A-ZÁÉÍÓÚÑ]{3,})\s(11|111)(?=\s*-|\s*$)/g, (m, w, n) => /^(CALLE|PASAJE|PJE|MZA|MANZANA|LOTE|CASA|PISO|DPTO|DEPTO|AV|AVDA|AVENIDA|RUTA|KM|BLOCK|TORRE|SECTOR|GRUPO|ETAPA|MONOBLOCK)$/.test(w) ? m : w + ' ' + n.replace(/1/g, 'I'));
     s = s.replace(/\s[.,]\s(?=[A-Z]{3})/g, ' - ');                                  // "CARLOS . SALTA" -> "CARLOS - SALTA"
+    s = s.replace(/(\s-)+\s-\s/g, ' - ').replace(/\s-\s(?!DE\b|LA\b|EL\b)[A-Z]{1,2}\s(?=[A-ZÁÉÍÓÚÑ]{4,}$)/, ' - ');   // "SALTA - - MO SALTA"
     s = s.replace(/\s*-\s*/g, ' - ').replace(/\s{2,}/g, ' ').replace(/^[\s\-.,:]+|[\s\-.,:]+$/g, '');
     return s;
   }
@@ -655,8 +715,13 @@ const DomicilioOCR = (() => {
     const T = String(t || '').toUpperCase();
     const i = T.search(/TR[AÁ](?:M|RN|NN|N)[I1L]?TE|RAMITE|TRAMIT/);
     if (i < 0) return null;
-    const m = /(?<!\d)(\d{9,11})(?!\d)/.exec(T.slice(i).replace(/(\d)[OQD]|[OQD](\d)/g, (x) => x.replace(/[OQD]/, '0')));
-    return m ? m[1] : null;
+    // el primer número de 9 a 11 cifras después de la etiqueta, que no sea el CUIL (en el DNI nuevo van uno al lado del otro)
+    for (const m of T.slice(i, i + 120).replace(/(\d)[OQD]|[OQD](\d)/g, (x) => x.replace(/[OQD]/, '0')).matchAll(/(?<!\d)(\d{9,11})(?!\d)/g)) {
+      if (m[1].length === 11 && cuilValido(m[1])) continue;
+      if (/^(20|23|24|27)\d{9}$/.test(m[1])) continue;
+      return m[1];
+    }
+    return null;
   }
 
   // ============================================
@@ -865,12 +930,12 @@ const DomicilioOCR = (() => {
     const yyN = +nac6.slice(0, 2);
 
     // Línea 1 (documento)
-    let dni = null, docOk = null;
+    let dni = null, docOk = null, dcDocOut = null;
     let l1orig = lineas.find(l => l !== l2orig && /^[I1][D0O<]ARG/.test(l));
     if (!l1orig) { const c = lineas.find(l => l !== l2orig && /[I1][D0O]ARG[0-9OQDILZSBG]{7}/.test(l)); if (c) l1orig = c.slice(c.search(/[I1][D0O]ARG/)); }
     if (l1orig) {
       const a = [...l1orig];
-      const dcDoc = A_DIGITO[a[14]] || a[14];
+      const dcDoc = A_DIGITO[a[14]] || a[14]; dcDocOut = /\d/.test(dcDoc || '') ? dcDoc : null;
       const rep = repararCampo(a.slice(5, 14).join(''), dcDoc || '?');
       for (let i = 5; i <= 14 && i < a.length; i++) a[i] = A_DIGITO[a[i]] || a[i];
       const campo = rep ? rep.valor : a.slice(5, 14).join('');
@@ -904,7 +969,7 @@ const DomicilioOCR = (() => {
       fechaVencimiento: `20${yy}-${mm}-${dd}`,
       nacionalidad: NACIONALIDADES[pais] || pais,
       verificada: nacOk && vencOk && docOk !== false,
-      checks: { documento: docOk, nacimiento: nacOk, vencimiento: vencOk, compuesto: compOk }
+      checks: { documento: docOk, nacimiento: nacOk, vencimiento: vencOk, compuesto: compOk }, dcDoc: dcDocOut
     };
   }
 
@@ -924,8 +989,8 @@ const DomicilioOCR = (() => {
     progresoCb = typeof onProgress === 'function' ? onProgress : null;
 
     const w = await initWorker();
-    const origen = await aElemento(fuente);
-    const gris = await preprocesar(origen);
+    let origen = await aElemento(fuente);
+    let gris = await preprocesar(origen);
     let raw = '';
     const ocr = async (img, params, desde, hasta, nombre) => {
       etapa(desde, hasta);
@@ -939,11 +1004,41 @@ const DomicilioOCR = (() => {
     // 1) imagen completa (con la posición de cada palabra, para ubicar las etiquetas aunque el DNI no esté justo en el marco)
     etapa(0, 0.25);
     await w.setParameters(PARAMS_TEXTO);
-    const r1 = await w.recognize(gris, {}, { text: true, blocks: true });
+    const wMRZp = initWorkerMRZ();   // se va cargando mientras tanto
+    // (a menor resolución: alcanza para ubicar etiquetas y líneas <<<, y tarda la mitad; los datos se releen en zonas ampliadas)
+    const pasadaGeneral = async (img) => {
+      const k = Math.min(1, 1600 / img.width), chica = k < 0.97 ? escalarA(img, 1600) : img;
+      const r = await w.recognize(chica, {}, { text: true, blocks: true });
+      r.k = k < 0.97 ? chica.width / img.width : 1;
+      return r;
+    };
+    let r1 = await pasadaGeneral(gris);
+    // DNI girado 90° (foto vertical o el DNI parado): sin líneas <<< se prueba girando la imagen, con una pasada rápida
+    const hayMRZ = (t) => /[I1][D0O]ARG|<<<</.test(String(t || '').toUpperCase().replace(/\s/g, ''));
+    // ¿qué tan "reverso derecho" parece un texto? (signos <, IDARG, etiquetas, palabras reales)
+    const puntajeReverso = (t) => { const U = String(t || '').toUpperCase();
+      return (U.match(/</g) || []).length / 2 + (/[I1][D0O]ARG/.test(U.replace(/\s/g, '')) ? 8 : 0) +
+        (/CU[I1]L/.test(U) ? 4 : 0) + (/DOMICI|OMICIL/.test(U) ? 4 : 0) + (/LUGAR|NACIM/.test(U) ? 3 : 0) + (U.match(/\b[A-ZÁÉÍÓÚÑ]{4,}\b/g) || []).length * 0.3; };
+    const p0 = puntajeReverso(r1.data.text);
+    // solo si la foto está parada (más alta que ancha) o casi no se leyó nada: una tarjeta derecha ya trae etiquetas legibles
+    // (con la cámara en vivo el DNI está derecho dentro del marco: no se prueba girar)
+    if (!contexto.marcoRel && !hayMRZ(r1.data.text) && (origen.height > origen.width * 1.1 || p0 < 5)) {
+      let mejor = null;
+      for (const ang of [90, -90]) {
+        const rot = rotar(origen, ang);
+        const { data: { text: tr } } = await w.recognize(escalarA(rot, 1300));
+        const p = puntajeReverso(tr);
+        log('🔄 prueba girando ' + ang + '°: puntaje ' + p.toFixed(1) + ' (sin girar ' + p0.toFixed(1) + ')');
+        if (p > p0 * 1.5 + 3 && (!mejor || p > mejor.p)) mejor = { rot, p };
+      }
+      if (mejor) { origen = mejor.rot; gris = await preprocesar(mejor.rot); r1 = await pasadaGeneral(gris); contexto = Object.assign({}, contexto, { marcoRel: null }); }
+    }
+    await w.setParameters(PARAMS_TEXTO);
     const text = r1.data.text || '';
     raw += '\n--- reverso completo ---\n' + text;
     log('📄 OCR reverso completo:\n' + text);
-    const palabras = palabrasDe(r1.data).filter((p) => p.b);
+    const palabras = palabrasDe(r1.data).filter((p) => p.b)
+      .map((p) => r1.k === 1 ? p : { t: p.t, b: { x0: p.b.x0 / r1.k, y0: p.b.y0 / r1.k, x1: p.b.x1 / r1.k, y1: p.b.y1 / r1.k } });
     const ancla = (re) => palabras.find((p) => re.test(sinT(p.t)));
     // recorte alrededor de una etiqueta, medido en alturas de letra (h) de esa etiqueta
     const zonaAncla = (p, ix0, iy0, ix1, iy1) => {
@@ -971,28 +1066,59 @@ const DomicilioOCR = (() => {
       }
     }
 
-    // 2) MRZ (líneas con <<<) del borde inferior; si los dígitos de control no cierran, otra vez con la luz normalizada
-    let mrz = extraerDesdeMRZ(text);
-    let ident = extraerMRZCompleta(text);
-    const identCompleta = () => ident && ident.verificada && ident.dni && ident.apellido;
-    if (!mrz.mrzVerificada || !identCompleta()) {
-      const variantes = [['normal', 1.3], ['ampliada', 1.9], ['luz normalizada', 1.3]];
-      for (let i = 0; i < variantes.length && !(mrz.mrzVerificada && identCompleta()); i++) {
-        const fuenteMrz = i === 2 ? await preprocesar(origen, 'fondo') : null;
-        const t = await ocr(fuenteMrz ? recortarRel(fuenteMrz, 0, 0.55, 1, 1, variantes[i][1], 3000) : recortarRel(base, 0, 0.6, 1, 1, variantes[i][1], 3000), PARAMS_MRZ, 0.25 + i * 0.08, 0.33 + i * 0.08, 'MRZ ' + variantes[i][0]);
-        const cand = extraerDesdeMRZ(t);
-        if (cand.mrzVerificada || (!mrz.fechaVencimiento && cand.fechaVencimiento)) mrz = cand;
-        ident = mejorIdentidad(ident, extraerMRZCompleta(t));
-      }
+    if (!marco && contexto.marcoRel) {   // la foto viene recortada al marco de la cámara: la tarjeta está donde estaba el marco
+      marco = contexto.marcoRel; base = recortarRel(gris, marco[0], marco[1], marco[2], marco[3], 1, 4000, 0); log('📐 tarjeta ubicada por el marco de la cámara');
     }
+
+    // 2) MRZ (líneas con <<<): con el motor OCR-B en paralelo con las zonas; si no hay, con el de siempre antes de las zonas
+    const textosMRZ = [text], nombresL3 = [];
+    // renglón de los nombres (el último con <<), para leerlo solo: así no se pierde la primera letra del apellido
+    let rectL3 = null;
+    { const filasMRZ = mrzPal.filter((p) => /<</.test(p.t)).sort((p, q) => q.b.y0 - p.b.y0);
+      if (filasMRZ.length) { const u = filasMRZ[0], h = u.b.y1 - u.b.y0;
+        rectL3 = { y0: Math.max(0, u.b.y0 - 0.45 * h), y1: Math.min(gris.height, u.b.y1 + 0.45 * h), h }; } }
+    const tareaMRZ = async (wk) => {
+      const propio = wk !== w;
+      const pasar = async (img, nombre, psm) => {
+        if (!propio) await w.setParameters(PARAMS_MRZ);
+        if (psm) await wk.setParameters({ tessedit_pageseg_mode: psm });
+        const { data: { text: t } } = await wk.recognize(img);
+        if (psm) await wk.setParameters({ tessedit_pageseg_mode: PARAMS_MRZ.tessedit_pageseg_mode });
+        raw += `\n--- MRZ ${nombre} ---\n` + (t || ''); log('📄 OCR MRZ ' + nombre + (propio ? ' (OCR-B)' : '') + ':\n' + t);
+        return t || '';
+      };
+      const ok = () => { const id = textosMRZ.map(extraerMRZCompleta).reduce(mejorIdentidad, null); const mz = textosMRZ.map(extraerDesdeMRZ).find((x) => x.mrzVerificada);
+        return !!(mz && id && id.verificada && id.dni && id.apellido); };
+      // primero con la luz normalizada (en fotos reales es la que mejor lee el OCR-B), después normal y ampliada
+      const variantes = [['luz normalizada', 1.3], ['normal', 1.3], ['ampliada', 1.9]];
+      for (let i = 0; i < variantes.length; i++) {
+        if (i > 0 && ok()) break;
+        if (i === 0 && !propio && ok()) break;   // con el motor de siempre, si la pasada general ya alcanzó no se repite
+        const fuenteMrz = i === 0 ? await preprocesar(origen, 'fondo') : null;
+        textosMRZ.push(await pasar(fuenteMrz ? recortarRel(fuenteMrz, 0, 0.55, 1, 1, variantes[i][1], 3000) : recortarRel(base, 0, 0.6, 1, 1, variantes[i][1], 3000), variantes[i][0]));
+      }
+      if (rectL3) {   // renglón de los nombres, solo
+        const esc = Math.max(1, Math.min(3, 44 / Math.max(8, rectL3.h)));
+        const x0 = marco ? marco[0] : 0, x1 = marco ? marco[2] : 1;
+        const t3 = await pasar(recortarRel(gris, x0, rectL3.y0 / gris.height, x1, rectL3.y1 / gris.height, esc, 3000), 'renglón de nombres', '7');
+        nombresL3.push(t3);
+      }
+    };
+    const wMRZ = await wMRZp;
+    const pMRZ = wMRZ ? enColaMRZ(() => tareaMRZ(wMRZ)) : null;
+    if (!wMRZ) await tareaMRZ(w);
 
     // 3) zonas ampliadas: domicilio (arriba), lugar de nacimiento, CUIL y trámite (franja del medio)
     // si se encontró la etiqueta, la zona se ubica a partir de ella; si no, por la posición típica en la tarjeta
-    const cDom = (aDom && zonaAncla(aDom, -0.6, -0.5, 48, 2.9)) || recortarRel(base, 0, 0, 0.9, 0.19, 3);
-    const cLug = (aLug && zonaAncla(aLug, -1, -0.4, 46, 2.6)) || recortarRel(base, 0, 0.12, 0.62, 0.28, 3);
+    const cDom = (aDom && zonaAncla(aDom, -0.6, -0.5, 48, 2.9)) || recortarRel(base, 0, 0, 0.9, 0.22, 3);
+    const cLug = (aLug && zonaAncla(aLug, -1, -0.4, 46, 4.2)) || recortarRel(base, 0, 0.12, 0.66, 0.31, 3);
     const cCuil = (aCuil && zonaAncla(aCuil, -1, -0.4, 14, 2.8)) || recortarRel(base, 0, 0.43, 0.82, 0.64, 2.5);
-    const zDom = await ocr(cDom, PARAMS_ZONA, 0.5, 0.62, 'zona domicilio' + (aDom ? ' (por etiqueta)' : ''));
+    const zDom = await ocr(cDom, PARAMS_ZONA, 0.5, 0.58, 'zona domicilio' + (aDom ? ' (por etiqueta)' : ''));
+    // la misma zona en blanco y negro (umbral local): con fotos reales es la lectura más limpia de la letra chica
+    const zDomB = await ocr(binarizarCanvas(recortarRel(base, 0, 0, 0.9, 0.22, 3)), PARAMS_ZONA, 0.58, 0.62, 'zona domicilio (blanco y negro)');
     const zLug = await ocr(cLug, PARAMS_ZONA_DISPERSA, 0.62, 0.72, 'zona lugar de nacimiento' + (aLug ? ' (por etiqueta)' : ''));
+    // lugar también en blanco y negro (en el DNI nuevo va en otro renglón, debajo de la etiqueta, sobre fondo de color)
+    const zLugB = await ocr(binarizarCanvas(recortarRel(base, 0, 0.12, 0.66, 0.31, 3)), PARAMS_ZONA, 0.7, 0.72, 'zona lugar (blanco y negro)');
     const zCuil = await ocr(cCuil, PARAMS_ZONA, 0.72, 0.8, 'zona CUIL' + (aCuil ? ' (por etiqueta)' : ''));
     const zTra = (aTra && !tramiteDeTexto(zCuil) && !tramiteDeTexto(text)) ? await ocr(zonaAncla(aTra, -1, -0.4, 12, 2.8) || cCuil, PARAMS_ZONA, 0.8, 0.85, 'zona trámite (por etiqueta)') : zCuil;
 
@@ -1001,14 +1127,28 @@ const DomicilioOCR = (() => {
     const baseFn = async () => { const f = await preprocesar(origen, 'fondo'); return marco ? recortarRel(f, marco[0], marco[1], marco[2], marco[3], 1, 4000, 0) : f; };
     // si la primera lectura del domicilio ya es limpia (todas palabras válidas, sin letras sueltas), se evita la segunda
     const domPrimera = [extraerDomicilio(zDom), domicilioDeZona(zDom)].filter(Boolean).sort((a, b) => puntajeDireccion(b) - puntajeDireccion(a))[0];
-    const limpia = domPrimera && domPrimera.split(/[\s,]+/).filter(Boolean).length >= 4 && puntajeDireccion(domPrimera) >= domPrimera.split(/[\s,]+/).filter(Boolean).length + 4;
+    const domPrimeraB = [extraerDomicilio(zDomB), domicilioDeZona(zDomB)].filter(Boolean).sort((a, b) => puntajeDireccion(b) - puntajeDireccion(a))[0];
+    const limpia = [domPrimera, domPrimeraB].some((domPrimera) => domPrimera && domPrimera.split(/[\s,]+/).filter(Boolean).length >= 4 && puntajeDireccion(domPrimera) >= domPrimera.split(/[\s,]+/).filter(Boolean).length + 4);
     const cDomF = limpia || (aDom && marco === null && zonaAncla(aDom, -0.6, -0.5, 48, 2.9)) ? null : recortarRel(await baseFn(), 0, 0, 0.9, 0.19, 3);
     const zDomF = cDomF ? await ocr(cDomF, PARAMS_ZONA, 0.85, 0.9, 'zona domicilio (luz normalizada)') : '';
-    const candDom = [extraerDomicilio(zDom), domicilioDeZona(zDom), extraerDomicilio(zDomF), domicilioDeZona(zDomF), extraerDomicilio(text)].filter(Boolean);
-    let domicilio = arreglarProvincias(arreglarSimbolos(candDom.sort((a, b) => puntajeDireccion(b) - puntajeDireccion(a))[0] || null), true);
+    const candDom = [extraerDomicilio(zDom), domicilioDeZona(zDom), extraerDomicilio(zDomB), domicilioDeZona(zDomB), extraerDomicilio(zDomF), domicilioDeZona(zDomF), extraerDomicilio(text)].filter(Boolean);
+    // se elige la lectura más limpia, sumando puntos si otras lecturas dicen casi lo mismo (dos lecturas que coinciden
+    // son más confiables que una sola que "suena bien")
+    const candDomN = candDom.map((v) => arreglarProvincias(arreglarSimbolos(v), true)).filter(Boolean);
+    const acuerdo = (v) => candDomN.filter((x) => x !== v && parecido(x, v) >= 0.85).length;
+    let domicilio = candDomN.map((v) => ({ v, p: puntajeDireccion(v) + 2 * acuerdo(v) })).sort((a, b) => b.p - a.p)[0];
+    domicilio = domicilio ? domicilio.v : null;
     // lugar: entre todas las lecturas, la más completa y limpia (la zona a veces corta el final: "ROSARIO DE LEF")
-    const candLug = [extraerLugarNacimiento(zLug), lugarDeZona(zLug), extraerLugarNacimiento(zDom), extraerLugarNacimiento(zDomF),
-      extraerLugarNacimiento(text), lugarTrasEtiqueta(text)].filter(Boolean);
+    // primero lo que viene después de la etiqueta "Lugar de nacimiento" (en la misma línea o en la siguiente);
+    // la zona sin etiqueta solo si no hay nada (si no, se confundía con el 2.º renglón del domicilio)
+    const textosLug = [zLug, zLugB, zDom, zDomB, zDomF, text];
+    let candLug = textosLug.flatMap((t) => [extraerLugarNacimiento(t), lugarTrasEtiqueta(t)]).filter(Boolean);
+    if (!candLug.length) candLug = [lugarDeZona(zLug), lugarDeZona(zLugB)].filter(Boolean);
+    // fuera lo que en realidad es el 2.º renglón del domicilio (mismas palabras, aunque mal leídas)
+    const tokDom = String(domicilio || '').toUpperCase().split(/[\s,.\-]+/).filter((t) => t.length >= 4 && !PROVINCIAS.includes(t) && t !== 'CAPITAL');
+    const pareceDom = (v) => { const t = String(v).toUpperCase().split(/[\s,.\-]+/).filter((x) => x.length >= 4 && !PROVINCIAS.includes(x) && x !== 'CAPITAL');
+      return t.length >= 2 && t.filter((x) => tokDom.some((d) => parecido(x, d) >= 0.6)).length >= Math.ceil(t.length * 0.6); };
+    candLug = candLug.filter((v) => !pareceDom(v) && !(domicilio && String(domicilio).toUpperCase().includes(String(v).toUpperCase()) && String(v).length > 8));
     const sinCola = (v) => {
       const t = v.split(' ');
       const basura = (w, prev) => { const x = w.replace(/[.,]/g, '').toUpperCase(); const p = (prev || '').replace(/[.,]/g, '').toUpperCase();
@@ -1016,12 +1156,53 @@ const DomicilioOCR = (() => {
       while (t.length > 1 && basura(t[t.length - 1], t[t.length - 2])) t.pop();
       return t.join(' ').replace(/[\s,.\-]+$/, '');
     };
-    let lugar = candLug.map((v) => arreglarProvincias(sinCola(String(v).toUpperCase()))).filter((v) => v && !/DOMICILIO/i.test(v))
-      .sort((a, b) => puntajeDireccion(b) - puntajeDireccion(a) || b.length - a.length)[0] || null;
+    // (sin letras sueltas ni guiones repetidos: "SALTA - - A 1 SANTA")
+    const limpiarLug = (v) => String(v).toUpperCase().split(' ').filter((t) => !/^[A-ZÁÉÍÓÚÑ0-9]$/.test(t) || t === 'Y').join(' ').replace(/(\s-)+\s-/g, ' -').replace(/\s+/g, ' ').trim();
+    const candLugN = candLug.map((v) => arreglarProvincias(sinCola(limpiarLug(v)))).filter((v) => v && !/DOMICILIO/i.test(v));
+    const acuerdoL = (v) => candLugN.filter((x) => x !== v && parecido(x, v) >= 0.85).length;
+    const malasL = (v) => v.split(/[\s,]+/).filter((t) => t && !VOCAB_DIR.has(t) && !/^[A-ZÁÉÍÓÚÑ.]{3,}$/.test(t)).length;
+    let lugar = candLugN.slice().sort((a, b) => (puntajeDireccion(b) + 2 * acuerdoL(b) - 2 * malasL(b)) - (puntajeDireccion(a) + 2 * acuerdoL(a) - 2 * malasL(a)) || b.length - a.length)
+      .filter((v) => v && !/DOMICILIO/i.test(v))[0] || null;
     // CUIL: primero una lectura que cierre sola con el dígito verificador (en cualquiera de las lecturas); recién después se repara
+    if (pMRZ) await pMRZ;
+    let mrz = textosMRZ.map(extraerDesdeMRZ).find((x) => x.mrzVerificada) || textosMRZ.map(extraerDesdeMRZ).find((x) => x.fechaVencimiento) || extraerDesdeMRZ(text);
+    let ident = textosMRZ.map(extraerMRZCompleta).reduce(mejorIdentidad, null);
+    // apellido y nombres: votación entre todas las lecturas (la primera letra se pierde a veces: "NCHEZ" / "SANCHEZ")
+    if (ident) {
+      // (el renglón leído solo vale doble: ahí no se pierde la primera letra)
+      const cands = textosMRZ.concat(nombresL3.flatMap((t) => ['X\n' + t, 'X\n' + t])).map((t) => {
+        const l = String(t || '').toUpperCase().split(/[\r\n]+/).map((x) => x.replace(/[^A-Z0-9<]/g, '')).find((x) => /^[A-Z<]{3,}<<[A-Z<]+$/.test(x.replace(/[0-9]/g, '')) && (x.match(/\d/g) || []).length <= 2 && !/^[I1][D0O]ARG/.test(x));
+        if (!l || /ARG</.test(l)) return null;
+        const p = l.replace(/[<SKCE]*$/, '').split('<<');
+        return p.length >= 2 ? { a: p[0].replace(/</g, ' ').trim(), n: p.slice(1).join(' ').replace(/</g, ' ').replace(/\s+/g, ' ').trim() } : null;
+      }).filter((c) => c && c.a.length >= 2);
+      const votar = (vals) => {
+        const c = new Map(); vals.filter(Boolean).forEach((v) => c.set(v, (c.get(v) || 0) + 1));
+        // una lectura que es otra con letras de más al principio ("SANCHEZ" ⊃ "NCHEZ") suma esos votos
+        [...c.keys()].forEach((v) => [...c.keys()].forEach((x) => { if (x !== v && x.length > v.length && x.endsWith(v) && x.length - v.length <= 2) c.set(x, c.get(x) + c.get(v) + 0.5); }));
+        return [...c.entries()].sort((p, q) => q[1] - p[1] || q[0].length - p[0].length)[0];
+      };
+      const va = votar(cands.map((c) => c.a)), vn = votar(cands.map((c) => c.n));
+      if (va && va[0] !== ident.apellido) { log('🗳 apellido por votación: ' + ident.apellido + ' → ' + va[0]); ident.apellido = va[0]; }
+      if (vn && vn[0] !== ident.nombre && vn[0].length >= (ident.nombre || '').length) ident.nombre = vn[0];
+    }
+
+    // Un CUIL que cierra solo con su dígito verificador trae el DNI bien: corrige un número de la MRZ mal leído
+    // ("25122159" por "25122169"), siempre que el dígito de control de la MRZ también cierre con el corregido.
+    const textosCuil0 = [zCuil, text, zDom + '\n' + zLug, zDomB].concat(textosMRZ.slice(1));   // (el CUIL a veces sale en la lectura de la MRZ)
+    const cuilLibre = textosCuil0.map((t) => extraerCUIL(t, { estricto: true })).find(Boolean);
+    if (cuilLibre && ident && ident.dni) {
+      const mid = cuilLibre.split('-')[1].replace(/^0+/, '');
+      let dif = 0; for (let k = 0; k < Math.max(mid.length, ident.dni.length); k++) if (mid[k] !== ident.dni[k]) dif++;
+      if (mid !== ident.dni && mid.length === ident.dni.length && dif <= 2 &&
+          (ident.dcDoc == null || String(digitoControl((mid + '<<<<<<<<<').slice(0, 9))) === ident.dcDoc)) {
+        log('🔧 DNI de la MRZ corregido con el CUIL: ' + ident.dni + ' → ' + mid);
+        ident.dni = mid; if (ident.checks) ident.checks.documento = true;
+      }
+    }
     const sexoMRZ = ident && ident.sexo ? ident.sexo[0] : null;
     const ctxC = Object.assign({}, contexto, { sexo: sexoMRZ, dni: (ident && ident.verificada && ident.dni) || contexto.dni || (ident && ident.dni) });
-    const textosCuil = [zCuil, text, zDom + '\n' + zLug];
+    const textosCuil = textosCuil0;
     const cuil = textosCuil.map((t) => extraerCUIL(t, Object.assign({ estricto: true }, ctxC))).find(Boolean)
       || textosCuil.map((t) => extraerCUIL(t, ctxC)).find(Boolean) || null;
     const tramite = tramiteDeTexto(zTra) || tramiteDeTexto(zCuil) || tramiteDeTexto(text);
@@ -1053,6 +1234,7 @@ const DomicilioOCR = (() => {
     leerTexto: (...a) => enCola(() => leerTexto(...a)),
     leerFrente: (...a) => enCola(() => leerFrente(...a)),
     cancelarFrente,
+    pareceReverso,
     precargar,
     liberar,
     setDebug: (v) => { DEBUG = !!v; },

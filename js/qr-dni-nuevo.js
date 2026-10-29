@@ -47,15 +47,18 @@ const QRDNINuevo = (() => {
 
   // Zona del QR en el dorso (arriba a la derecha) y la tarjeta completa, en varias escalas
   // El QR es muy denso: se lee mejor ampliando solo su zona, y en varias escalas (cada lector acierta en escalas distintas)
+  // (0 = tamaño original: con fotos reales movidas, ampliar empeora; a tamaño original + enfoque, se lee)
+  // primero la imagen entera a tamaño original (en fotos reales fue la que leyó el QR), después la zona del QR
   const INTENTOS = [
-    { x: 0.6, y: 0.1, w: 0.4, h: 0.6, anchos: [1400, 1800, 2300] },
-    { x: 0.45, y: 0, w: 0.55, h: 0.8, anchos: [2000] },
+    { x: 0, y: 0, w: 1, h: 1, anchos: [0] },
+    { x: 0.6, y: 0.1, w: 0.4, h: 0.6, anchos: [0, 1400] },
+    { x: 0.45, y: 0, w: 0.55, h: 0.8, anchos: [0, 2000] },
     { x: 0, y: 0, w: 1, h: 1, anchos: [2600] }
   ];
-  const ANCHOS_VIVO = [1200, 1600, 2000];
+  const ANCHOS_VIVO = [0, 1200, 0, 1600];
 
   // Para el video en vivo (la tarjeta puede estar en cualquier parte del cuadro): cuadro entero
-  const INTENTOS_FRAME = [{ x: 0, y: 0, w: 1, h: 1, anchos: [1920, 2560] }];
+  const INTENTOS_FRAME = [{ x: 0, y: 0, w: 1, h: 1, anchos: [1920, 2880] }];
 
   // Detector nativo del teléfono (rápido y fuera del hilo principal): evita que la cámara se ponga lenta.
   let detectorNativo = null, llamadasFrame = 0;
@@ -98,7 +101,7 @@ const QRDNINuevo = (() => {
       const sw = Math.round(canvas.width * it.w), sh = Math.round(canvas.height * it.h);
       for (const ancho of (anchosFijos || it.anchos)) {
         if (enVivo && !lectorHilo.libre()) return null;
-        const esc = Math.min(ancho, 2600) / sw;
+        const esc = ancho ? Math.min(ancho, 2600) / sw : 1;
         const w = Math.round(sw * esc), h = Math.round(sh * esc);
         if (w * h > 7e6) continue;
         const c = document.createElement('canvas');
@@ -106,7 +109,7 @@ const QRDNINuevo = (() => {
         const ctx = c.getContext('2d', { willReadFrequently: true });
         ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
         ctx.drawImage(canvas, sx, sy, sw, sh, 0, 0, w, h);
-        const r = await lectorHilo.leer(c, ['qr'], 8000);
+        const r = await lectorHilo.leer(c, ['qr'], 8000)
         if (!hiloOk()) return undefined;   // el hilo se cayó: que siga el lector de siempre
         const datos = r && parsear(r.texto);
         if (datos) {
@@ -126,8 +129,10 @@ const QRDNINuevo = (() => {
       llamadasFrame++;
       if (opciones.modo === 'vivo' || opciones.modo === 'frame') {
         if (detectorNativo) { const rn = await decodificarNativo(canvas); if (rn) return rn; }
-        const lista = opciones.modo === 'frame' ? INTENTOS_FRAME : [INTENTOS[0]];
-        const anchos = opciones.modo === 'frame' ? [1920] : [ANCHOS_VIVO[llamadasFrame % ANCHOS_VIVO.length]];
+        // en vivo, una prueba por vuelta: zona del QR o recorte entero, a tamaño original o ampliado
+        const vuelta = llamadasFrame % 4;
+        const lista = opciones.modo === 'frame' ? INTENTOS_FRAME : [vuelta === 1 ? INTENTOS[0] : INTENTOS[1]];
+        const anchos = opciones.modo === 'frame' ? [llamadasFrame % 2 ? 2880 : 1920] : [vuelta === 3 ? 1400 : 0];
         const r = await decodificarEnHilo(canvas, lista, anchos, true);
         if (r !== undefined) return r;
       } else {
@@ -143,7 +148,7 @@ const QRDNINuevo = (() => {
       // cámara en vivo con la imagen ya recortada al marco: zona del QR, una escala por vuelta (para no trabar la cámara)
       llamadasFrame++;
       if (detectorNativo) { const rn = await decodificarNativo(canvas); if (rn) return rn; if (detectorNativo && llamadasFrame % 3 !== 0) return null; }
-      return decodificarEn(canvas, [INTENTOS[0]], [ANCHOS_VIVO[llamadasFrame % ANCHOS_VIVO.length]], 'dontInvert');
+      return decodificarEn(canvas, [INTENTOS[1]], [ANCHOS_VIVO[llamadasFrame % ANCHOS_VIVO.length]], 'dontInvert');
     }
     if (opciones.modo === 'frame') {
       llamadasFrame++;
@@ -162,7 +167,7 @@ const QRDNINuevo = (() => {
       const sx = Math.round(canvas.width * it.x), sy = Math.round(canvas.height * it.y);
       const sw = Math.round(canvas.width * it.w), sh = Math.round(canvas.height * it.h);
       for (const ancho of (anchosFijos || it.anchos)) {
-        const esc = ancho / sw;
+        const esc = ancho ? ancho / sw : 1;
         const w = Math.round(sw * esc), h = Math.round(sh * esc);
         if (w * h > 9e6) continue;
         await pausa();

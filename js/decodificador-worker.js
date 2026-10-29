@@ -46,6 +46,48 @@ function conZXing(lector, pistas, lum, w, h, binarizador) {
   return null;
 }
 
+// Foto movida o desenfocada: se realza el borde (máscara de enfoque) y, si no alcanza, se pasa a blanco y negro (Otsu).
+// Con fotos reales de un DNI nuevo, el QR solo se leyó así.
+function enfocar(lum, w, h) {
+  const tmp = new Float32Array(w * h), out = new Uint8ClampedArray(w * h), r = 2;
+  for (let y = 0; y < h; y++) {   // desenfoque horizontal (caja)
+    let acc = 0; const o = y * w;
+    for (let x = -r; x <= r; x++) acc += lum[o + Math.min(w - 1, Math.max(0, x))];
+    for (let x = 0; x < w; x++) { tmp[o + x] = acc / (2 * r + 1); acc += lum[o + Math.min(w - 1, x + r + 1)] - lum[o + Math.max(0, x - r)]; }
+  }
+  for (let x = 0; x < w; x++) {   // vertical + máscara
+    let acc = 0;
+    for (let y = -r; y <= r; y++) acc += tmp[Math.min(h - 1, Math.max(0, y)) * w + x];
+    for (let y = 0; y < h; y++) {
+      const i = y * w + x, b = acc / (2 * r + 1);
+      out[i] = 2 * lum[i] - b;
+      acc += tmp[Math.min(h - 1, y + r + 1) * w + x] - tmp[Math.max(0, y - r) * w + x];
+    }
+  }
+  return out;
+}
+function otsu(lum) {
+  const hist = new Uint32Array(256); for (let i = 0; i < lum.length; i++) hist[lum[i]]++;
+  let sum = 0; for (let t = 0; t < 256; t++) sum += t * hist[t];
+  let sB = 0, wB = 0, max = 0, umbral = 127;
+  for (let t = 0; t < 256; t++) {
+    wB += hist[t]; if (!wB) continue; const wF = lum.length - wB; if (!wF) break;
+    sB += t * hist[t]; const mB = sB / wB, mF = (sum - sB) / wF, v = wB * wF * (mB - mF) * (mB - mF);
+    if (v > max) { max = v; umbral = t; }
+  }
+  const out = new Uint8ClampedArray(lum.length); for (let i = 0; i < lum.length; i++) out[i] = lum[i] > umbral ? 255 : 0;
+  return out;
+}
+function aRGBA(lum) { const o = new Uint8ClampedArray(lum.length * 4); for (let i = 0, j = 0; i < lum.length; i++, j += 4) { o[j] = o[j + 1] = o[j + 2] = lum[i]; o[j + 3] = 255; } return o; }
+function leerQR(rgba, lum, w, h) {
+  if (typeof jsQR === 'function') {
+    const q = jsQR(rgba, w, h, { inversionAttempts: 'dontInvert' });
+    if (q && q.data) { const L = q.location; return { texto: q.data, formato: 'qr', puntos: L ? [L.topLeftCorner, L.topRightCorner, L.bottomRightCorner, L.bottomLeftCorner] : [], esquinas: true }; }
+  }
+  if (lectorQR) { const r = conZXing(lectorQR, pistasQR, lum, w, h, 'hybrid'); if (r) { r.formato = 'qr'; return r; } }
+  return null;
+}
+
 self.onmessage = (ev) => {
   const { id, w, h, buf, tipos } = ev.data || {};
   if (ev.data && ev.data.ping) { self.postMessage({ id, pong: true, listo, errorCarga }); return; }
@@ -59,18 +101,14 @@ self.onmessage = (ev) => {
         if (res) { res.formato = 'pdf417'; break; }
       }
       if (t === 'qr') {
-        if (typeof jsQR === 'function') {
-          const q = jsQR(rgba, w, h, { inversionAttempts: 'dontInvert' });
-          if (q && q.data) {
-            const L = q.location;
-            res = { texto: q.data, formato: 'qr', puntos: L ? [L.topLeftCorner, L.topRightCorner, L.bottomRightCorner, L.bottomLeftCorner] : [], esquinas: true };
-            break;
-          }
+        res = leerQR(rgba, lum, w, h);
+        if (!res && w * h <= 6e6) {
+          const e = enfocar(lum, w, h);
+          res = leerQR(aRGBA(e), e, w, h);
+          if (!res) { const b = otsu(e); res = leerQR(aRGBA(b), b, w, h); }
+          if (!res) { const b = otsu(lum); res = leerQR(aRGBA(b), b, w, h); }
         }
-        if (lectorQR) {
-          res = conZXing(lectorQR, pistasQR, lum, w, h, 'hybrid');
-          if (res) { res.formato = 'qr'; break; }
-        }
+        if (res) break;
       }
     }
   } catch (e) { res = null; }
