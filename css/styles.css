@@ -103,6 +103,13 @@ h1, h2 { margin: 0; }
 .status-pill.error { color: var(--err); border-color: rgba(239, 90, 90, .45); }
 .status-pill.error .dot { background: var(--err); }
 
+/* versión de la app, arriba a la derecha (para saber cuándo hubo un cambio) */
+.app-version {
+  position: absolute; bottom: -10px; right: 10px; z-index: 5; padding: 1px 7px; border-radius: 999px;
+  border: 1px solid var(--accent); background: var(--panel); color: var(--accent);
+  font-family: inherit; font-size: 10px; font-weight: 700; line-height: 1.5; letter-spacing: .04em; cursor: pointer;
+}
+
 /* ---------- Layout ---------- */
 .app-main { max-width: 880px; margin: 0 auto; padding: 16px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
 /* sin esto, la fila de países (que no se corta) estiraba toda la página en el celular */
