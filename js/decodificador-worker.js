@@ -89,7 +89,7 @@ function leerQR(rgba, lum, w, h) {
 }
 
 self.onmessage = (ev) => {
-  const { id, w, h, buf, tipos } = ev.data || {};
+  const { id, w, h, buf, tipos, mejorar } = ev.data || {};
   if (ev.data && ev.data.ping) { self.postMessage({ id, pong: true, listo, errorCarga }); return; }
   let res = null;
   try {
@@ -102,7 +102,7 @@ self.onmessage = (ev) => {
       }
       if (t === 'qr') {
         res = leerQR(rgba, lum, w, h);
-        if (!res && w * h <= 6e6) {
+        if (!res && mejorar !== false && w * h <= 6e6) {   // (realce: más lento, no en cada cuadro en vivo)
           const e = enfocar(lum, w, h);
           res = leerQR(aRGBA(e), e, w, h);
           if (!res) { const b = otsu(e); res = leerQR(aRGBA(b), b, w, h); }

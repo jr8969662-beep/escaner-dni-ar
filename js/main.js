@@ -907,6 +907,67 @@
       return;
     }
     if (typeof subirResolucion === 'function') await subirResolucion();
+
+    // ===== MODO RÁPIDO: el frente ya se leyó (DNI viejo o nuevo) → del reverso solo hacen falta domicilio,
+    // lugar de nacimiento y CUIL. Sin MRZ ni QR: dos franjas de la tarjeta, cuadro tras cuadro, hasta tener los tres.
+    const dniFrente = ultimoResultado && (ultimoResultado.dni || ultimoResultado.numero);
+    // (si solo se leyó el QR del reverso, faltan el sexo y el vencimiento: se leen también las líneas <<<, en paralelo)
+    if (!modoReversoNuevo && dniFrente && paisSeleccionado === 'arg' && DomicilioOCR.leerReversoRapido) {
+      const conMRZ = !ultimoResultado.sexo || !ultimoResultado.fechaVencimiento;
+      const sx = String((ultimoResultado && ultimoResultado.sexo) || '');
+      const sexo = /^F/i.test(sx) ? 'F' : /^M/i.test(sx) ? 'M' : null;
+      const acumR = {}; let rawR = '', mejorR = null, domLimpio = false, identR = null;
+      const MAX_R = 4;
+      // se corta apenas están los tres (con el domicilio limpio, o ya en el 2.º intento)
+      const listoR = (intento) => acumR.domicilio && acumR.cuil && acumR.lugarNacimiento && (domLimpio || intento > 2) &&
+        (!conMRZ || (identR && identR.sexo && acumR.fechaVencimiento) || intento > 3);
+      for (let intento = 1; intento <= MAX_R && autoScanActivo && !listoR(intento); intento++) {
+        if (domicilioProgressText) domicilioProgressText.textContent = `Leyendo domicilio, lugar de nacimiento y CUIL… (${intento})`;
+        if (domicilioProgressFill) domicilioProgressFill.style.width = '0%';
+        const c = await capturarMasNitidoRecortado(2, 60);
+        try {
+          const r = await DomicilioOCR.leerReversoRapido(c, { dni: dniFrente, sexo, marcoRel: c.marcoRel || null, conMRZ: conMRZ && !(identR && identR.sexo && acumR.fechaVencimiento) }, (p) => {
+            if (domicilioProgressFill) domicilioProgressFill.style.width = (p * 100) + '%';
+          });
+          if (!autoScanActivo) break;
+          rawR += `\n===== intento ${intento} =====\n` + (r.raw || '');
+          if (r.domicilio && (!acumR.domicilio || (r.limpio && !domLimpio))) { acumR.domicilio = r.domicilio; domLimpio = !!r.limpio; mejorR = c; }
+          if (!acumR.lugarNacimiento && r.lugarNacimiento) acumR.lugarNacimiento = r.lugarNacimiento;
+          if (!acumR.cuil && r.cuil) acumR.cuil = r.cuil;
+          if (r.identidad && r.identidad.dni === String(dniFrente).replace(/\D/g, '') && (!identR || (r.identidad.verificada && !identR.verificada))) identR = r.identidad;
+          if (!acumR.fechaVencimiento && r.fechaVencimiento) { acumR.fechaVencimiento = r.fechaVencimiento; acumR.nacionalidad = r.nacionalidad; }
+          mejorR = mejorR || c;
+        } catch (e) { console.warn('Reverso rápido:', e); }
+        // dos intentos sin leer nada: el DNI no está en el marco → se pasa a la lectura completa (la ubica sola)
+        if (intento === 2 && !acumR.domicilio && !acumR.cuil && !acumR.lugarNacimiento) break;
+      }
+      if (autoScanActivo && (acumR.domicilio || acumR.cuil || acumR.lugarNacimiento)) {
+        autoScanProcesando = false; autoScanActivo = false;
+        detenerCamaraModal();
+        if (domicilioPreview && mejorR) { domicilioPreview.src = mejorR.toDataURL('image/jpeg', 0.7); domicilioPreview.hidden = false; }
+        if (domicilioVideo) domicilioVideo.hidden = true;
+        if (domInputDomicilio) domInputDomicilio.value = acumR.domicilio || '';
+        if (domInputNacimiento) domInputNacimiento.value = acumR.lugarNacimiento || '';
+        if (domInputCuil) domInputCuil.value = acumR.cuil || '';
+        if (domInputVencimiento) domInputVencimiento.value = (ultimoResultado && ultimoResultado.fechaVencimiento) || acumR.fechaVencimiento || '';
+        if (domInputNacionalidad) domInputNacionalidad.value = (ultimoResultado && ultimoResultado.nacionalidad) || acumR.nacionalidad || '';
+        // sexo (y lo que falte) desde las líneas <<<, si coinciden con el DNI ya leído
+        if (identR) ultimaIdentidad = Object.assign({}, ultimaIdentidad || {}, { sexo: identR.sexo, fechaVencimiento: acumR.fechaVencimiento || identR.fechaVencimiento, checks: identR.checks });
+        if (identR && ultimoResultado && !ultimoResultado.sexo && identR.checks && identR.checks.nacimiento && identR.checks.vencimiento) ultimoResultado.sexo = identR.sexo;
+        if (domicilioProgress) domicilioProgress.hidden = true;
+        if (domicilioResultado) domicilioResultado.hidden = false;
+        if (btnGuardarDomicilio) btnGuardarDomicilio.hidden = false;
+        if (btnReintentarDomicilio) btnReintentarDomicilio.hidden = false;
+        mostrarDebugOCR(rawR);
+        const info = document.querySelector('.domicilio-info');
+        if (info) info.textContent = `${ultimoResultado.nombreCompleto || ''} · DNI ${dniFrente}`;
+        const faltan = [!acumR.domicilio && 'domicilio', !acumR.lugarNacimiento && 'lugar de nacimiento', !acumR.cuil && 'CUIL'].filter(Boolean);
+        mostrarToast(faltan.length ? 'No se leyó: ' + faltan.join(', ') + '. Escribilo o tocá Reintentar.' : '✓ Domicilio, lugar y CUIL leídos', faltan.length ? 'error' : 'success');
+        return;
+      }
+      if (!autoScanActivo) { autoScanProcesando = false; return; }
+    }
+
     // 1.er intento: recortado al marco. Si no aparecieron las líneas <<< (DNI fuera del marco o girado), la imagen entera.
     const capturar = (intento) => (typeof capturarMasNitidoRecortado === 'function' && (intento === 1 || (ident && ident.dni)))
       ? capturarMasNitidoRecortado(2, 100) : capturarMasNitido(domicilioVideo, 2, 100);

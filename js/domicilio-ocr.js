@@ -590,6 +590,8 @@ const DomicilioOCR = (() => {
     if (!v) return v;
     let s = String(v).toUpperCase();
     s = s.replace(/^.*?\bDOMICILIO\b\s*[:.;]?\s*/, '');                         // etiqueta (o basura antes de ella)
+    { const t0 = s.split(' ')[0] || '', l0 = t0.replace(/[^A-Z]/g, '');                 // etiqueta mal leída: "DOMO", "MICI", "DOMACIO"
+      if (l0.length >= 4 && l0.length <= 9 && parecido(l0, 'DOMICILIO') >= 0.4 && !/^(DOMINGO|DOMINICANA|DOMINGUEZ)$/.test(l0) && s.split(' ').length > 2) s = s.slice(t0.length).trim(); }
     // si se coló el renglón siguiente ("LUGAR DE NACIMIENTO: ..."), se corta ahí (aunque esté mal leído: "HIGADR NE NACIMIENTA")
     { const t = s.split(' '), i = t.findIndex((w, k) => k >= 3 && w.length >= 6 && parecido(w, 'NACIMIENTO') >= 0.6);
       if (i >= 0) s = t.slice(0, Math.max(1, i - 2)).join(' '); }
@@ -604,7 +606,7 @@ const DomicilioOCR = (() => {
     s = s.replace(/(\d)\s?[.,]\s?8\s?(?:-\s?)?(?=[A-Z]{3})/g, '$1 - B° ');          // "245. 8 - SAN", "245. 8- SAN", "7. 8 JUAN"
     s = s.replace(/\s-\s?8\s(?=[A-Z]{2,}\s)/g, ' - B° ');                              // "DPTO B - 8 TRES", "455 -8 EL"
     s = s.replace(/\bB\s?[*º°'"´`:;”“’‘](?=\s|[A-Z])/g, 'B° ');                         // "B*", "Bº", "B:" -> "B°"
-    s = s.replace(/(^|\s-\s)B\s(?=[A-Z]{3})/g, '$1B° ');                             // "- B JUAN" -> "- B° JUAN"
+    s = s.replace(/(^|\s-\s)B\s(?=[A-Z]{3}|[A-Z]{2}\s)/g, '$1B° ');                // "- B JUAN", "- B EL TRIBUNO" -> "B°"
     s = s.replace(/\bB8[*°º"”']?(?=\s)/g, 'B°').replace(/(\d\s)8[*"”](?=\s[A-Z])/g, '$1B°');   // "B8*", "401 8” CIUDAD"
     s = s.replace(/(\d{2,}\s)B\s(?=[A-Z]{3,}\s)/g, '$1B° ');                            // "401 B CIUDAD" (el ° no se leyó)
     s = s.replace(/(^|\s-\s)V\s(?=[A-Z]{3})/g, '$1Vª ');                              // "V BEBA" (Villa) -> "Vª BEBA"
@@ -612,6 +614,9 @@ const DomicilioOCR = (() => {
     s = s.replace(/\b(?:LI|IL|L1|1L|I1|1I)(?=\s*-|\s*$)/g, 'II');                     // "PABLO LI -" -> "PABLO II -"
     // "JUAN PABLO 11 -" -> "JUAN PABLO II -" (número romano después de un nombre, no después de CALLE, MZA, LOTE...)
     s = s.replace(/\b([A-ZÁÉÍÓÚÑ]{3,})\s(11|111)(?=\s*-|\s*$)/g, (m, w, n) => /^(CALLE|PASAJE|PJE|MZA|MANZANA|LOTE|CASA|PISO|DPTO|DEPTO|AV|AVDA|AVENIDA|RUTA|KM|BLOCK|TORRE|SECTOR|GRUPO|ETAPA|MONOBLOCK)$/.test(w) ? m : w + ' ' + n.replace(/1/g, 'I'));
+    // basura antes del domicilio ("O AV. JUJUY", "RA. AV. BELGRANO"): pedazos de 1-2 letras que no son AV, B°, etc.
+    s = s.replace(/^(?:(?!AV\b|B°|Vª|V\s[A-Z]{3}|PJE\b|DR\b|SN\b)[A-Z]{1,2}[.,:;]?\s)+(?=[A-Z0-9])/, '');
+    s = s.replace(/^V\s(?=[A-Z]{3})/, 'Vª ');
     s = s.replace(/\s[.,]\s(?=[A-Z]{3})/g, ' - ');                                  // "CARLOS . SALTA" -> "CARLOS - SALTA"
     s = s.replace(/(\s-)+\s-\s/g, ' - ').replace(/\s-\s(?!DE\b|LA\b|EL\b)[A-Z]{1,2}\s(?=[A-ZÁÉÍÓÚÑ]{4,}$)/, ' - ');   // "SALTA - - MO SALTA"
     s = s.replace(/\s*-\s*/g, ' - ').replace(/\s{2,}/g, ' ').replace(/^[\s\-.,:]+|[\s\-.,:]+$/g, '');
@@ -649,7 +654,9 @@ const DomicilioOCR = (() => {
     return domicilioDeLineas(lineasDe(ls));
   }
   function domicilioDeLineas(lineas) {
-    const ls = lineas.filter((l) => !esLineaEtiqueta(l, ['LUGAR', 'NACIMIENTO']));
+    // el domicilio termina donde empieza "Lugar de nacimiento" (lo de abajo es el lugar, no un 2.º renglón del domicilio)
+    const corte = lineas.findIndex((l, i) => i > 0 && esLineaEtiqueta(l, ['LUGAR', 'NACIMIENTO']));
+    const ls = (corte > 0 ? lineas.slice(0, corte) : lineas).filter((l) => !esLineaEtiqueta(l, ['LUGAR', 'NACIMIENTO']));
     if (!ls.length) return null;
     let l1 = ls[0];
     const m = /^\W*([A-Za-zÁÉÍÓÚáéíóú]{3,12})[.:,]?\s+(.*)$/.exec(l1);
@@ -982,6 +989,108 @@ const DomicilioOCR = (() => {
   function mejorIdentidad(a, b) { return puntajeIdentidad(b) > puntajeIdentidad(a) ? b : a; }
 
   // ============================================
+  // LECTURA RÁPIDA DEL REVERSO: solo domicilio, lugar de nacimiento y CUIL
+  // (cuando el frente ya se leyó: no hace falta la MRZ ni el QR). La tarjeta está donde está el marco de la
+  // cámara, así que se leen directamente dos franjas: arriba (domicilio y lugar) y al medio (CUIL).
+  // Sirve igual para el DNI viejo y el nuevo (las dos franjas cubren las posiciones de ambos).
+  // ============================================
+  async function leerReversoRapido(fuente, contexto = {}, onProgress) {
+    progresoCb = typeof onProgress === 'function' ? onProgress : null;
+    const w = await initWorker();
+    const origen = await aElemento(fuente);
+    const rel = contexto.marcoRel || [0, 0, 1, 1];
+    const anchoO = origen.videoWidth || origen.naturalWidth || origen.width;
+    const ancho = anchoO * (rel[2] - rel[0]);
+    // franja en coordenadas de la TARJETA (0-1, puede salirse un poco del marco: el DNI no siempre queda justo)
+    const franja = (xa, ya, xb, yb, esc, max) => {
+      const W = rel[2] - rel[0], H = rel[3] - rel[1];
+      const x0 = Math.max(0, rel[0] + xa * W), x1 = Math.min(1, rel[0] + xb * W), y0 = Math.max(0, rel[1] + ya * H), y1 = Math.min(1, rel[1] + yb * H);
+      return recortarRel(origen, x0, y0, x1, y1, esc, max, 14);
+    };
+    let raw = '';
+    const leerZona = async (canvas, nombre, desde, hasta) => {
+      etapa(desde, hasta);
+      const { data: { text } } = await w.recognize(canvas);
+      raw += `\n--- ${nombre} ---\n` + (text || ''); log('⚡ ' + nombre + ':\n' + text);
+      return text || '';
+    };
+    // (opcional) las líneas <<< en el otro motor, al mismo tiempo: sexo y vencimiento cuando no vino el frente
+    let pMRZ = null;
+    if (contexto.conMRZ) {
+      const wm = await initWorkerMRZ();
+      if (wm) pMRZ = enColaMRZ(async () => {
+        const img = await preprocesar(franja(-0.03, 0.58, 1.03, 1.05, 1, 2400), 'fondo');
+        const { data: { text } } = await wm.recognize(img);
+        raw += '\n--- MRZ (OCR-B) ---\n' + (text || ''); log('⚡ MRZ:\n' + text);
+        return text || '';
+      });
+    }
+    await w.setParameters(PARAMS_ZONA);
+    // franja de arriba (domicilio en 1-2 renglones + lugar de nacimiento), ampliada: letra de unos 30 px
+    const top = franja(-0.02, -0.07, 0.88, 0.33, Math.min(3, 2300 / (ancho * 0.9)), 2300);
+    const tTop = await leerZona(await preprocesar(top), 'franja domicilio y lugar', 0, 0.45);
+    // franja del CUIL
+    const cu = franja(-0.02, 0.40, 0.66, 0.70, Math.min(3, 1700 / (ancho * 0.68)), 1700);
+    const tCuil = await leerZona(await preprocesar(cu), 'franja CUIL', 0.45, 0.7);
+
+    const dniPad = String(contexto.dni || '').replace(/\D/g, '');
+    const ctx = { dni: dniPad || null, sexo: contexto.sexo || null };
+    const cuilDe = (ts) => ts.map((t) => extraerCUIL(t, Object.assign({ estricto: true }, ctx))).find(Boolean) || ts.map((t) => extraerCUIL(t, ctx)).find(Boolean) || null;
+    const domDe = (ts) => {
+      const c = ts.flatMap((t) => [extraerDomicilio(t), domicilioDeZona(t)]).filter(Boolean).map((v) => arreglarProvincias(arreglarSimbolos(v), true)).filter(Boolean);
+      const acuerdo = (v) => c.filter((x) => x !== v && parecido(x, v) >= 0.85).length;
+      const r = c.map((v) => ({ v, p: puntajeDireccion(v) + 2 * acuerdo(v) })).sort((a, b) => b.p - a.p)[0];
+      return r ? r.v : null;
+    };
+    const lugDe = (ts, dom) => {
+      const c = ts.flatMap((t) => [extraerLugarNacimiento(t), lugarTrasEtiqueta(t)]).filter(Boolean)
+        .map((v) => arreglarProvincias(String(v).toUpperCase().split(' ').filter((x) => !/^[A-ZÁÉÍÓÚÑ0-9]$/.test(x) || x === 'Y').join(' ').replace(/[\s,.\-]+$/, '')))
+        .filter((v) => v && v.length >= 3 && !/DOMICILIO/.test(v) && !(dom && dom.includes(v) && v.length > 8));
+      if (c.length) return c.sort((a, b) => puntajeDireccion(b) - puntajeDireccion(a))[0];
+      // sin la etiqueta (en el DNI nuevo es chiquita y gris): el último renglón limpio de la franja, debajo del domicilio
+      const norm = (x) => String(x || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+      for (const t of ts) {
+        const ls = lineasDe(t).map((l) => l.replace(/^[^A-ZÁÉÍÓÚÑ0-9]+/, '').trim()).filter((l) => (l.match(/[A-ZÁÉÍÓÚÑ]/g) || []).length >= 3);
+        // renglones que forman el domicilio (el primero que coincide y, si está, el siguiente)
+        const nd = norm(dom);
+        let i = ls.findIndex((l) => nd && norm(l).length >= 6 && nd.includes(norm(l).slice(-12)));
+        if (i < 0) continue;
+        if (ls[i + 1] && nd.endsWith(norm(ls[i + 1])) && norm(ls[i + 1]).length >= 4) i++;
+        const cand = ls[i + 1];
+        if (cand && /^[A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ .,\-]{2,}$/.test(cand) && puntajeDireccion(cand) >= 1 && !/DOMICILIO|LUGAR|NACIM/.test(cand)) return arreglarProvincias(cand.replace(/[\s,.\-]+$/, ''));
+      }
+      return null;
+    };
+    const limpia = (v) => { if (!v) return false; const t = v.split(/[\s,]+/).filter(Boolean); return t.length >= 3 && puntajeDireccion(v) >= t.length + 2; };
+
+    const textosTop = [tTop], textosCuil = [tCuil, tTop];
+    let domicilio = domDe(textosTop), cuil = cuilDe(textosCuil);
+    // si algo quedó dudoso, la misma franja en blanco y negro (umbral local): con fotos reales suele leer más limpio
+    if (!limpia(domicilio)) {
+      textosTop.push(await leerZona(binarizarCanvas(franja(-0.02, -0.07, 0.88, 0.33, Math.min(3, 2300 / (ancho * 0.9)), 2300)), 'franja domicilio (blanco y negro)', 0.7, 0.88));
+      domicilio = domDe(textosTop);
+    }
+    if (!cuil) {
+      textosCuil.push(await leerZona(binarizarCanvas(franja(-0.02, 0.40, 0.66, 0.70, Math.min(3, 1700 / (ancho * 0.68)), 1700)), 'franja CUIL (blanco y negro)', 0.88, 1));
+      cuil = cuilDe(textosCuil);
+    }
+    const lugar = lugDe(textosTop, domicilio);
+    let mrz = null, identidad = null;
+    if (contexto.conMRZ) {
+      let tM = pMRZ ? await pMRZ : null;
+      if (tM === null) {   // sin el motor OCR-B: con el de siempre
+        await w.setParameters(PARAMS_MRZ);
+        tM = (await w.recognize(await preprocesar(franja(-0.03, 0.58, 1.03, 1.05, 1.3, 2600), 'fondo'))).data.text || '';
+      }
+      mrz = extraerDesdeMRZ(tM); identidad = extraerMRZCompleta(tM);
+    }
+    await w.setParameters(PARAMS_TEXTO);
+    if (progresoCb) progresoCb(1);
+    return { domicilio, lugarNacimiento: lugar, cuil, raw, limpio: limpia(domicilio), identidad,
+      fechaVencimiento: mrz && mrz.mrzVerificada ? mrz.fechaVencimiento : null, nacionalidad: mrz && mrz.nacionalidad, mrzVerificada: mrz ? mrz.mrzVerificada : null };
+  }
+
+  // ============================================
   // LECTURA COMPLETA
   // ============================================
   async function leer(fuente, pais = 'arg', onProgress, contexto = {}) {
@@ -1201,9 +1310,13 @@ const DomicilioOCR = (() => {
       }
     }
     const sexoMRZ = ident && ident.sexo ? ident.sexo[0] : null;
-    const ctxC = Object.assign({}, contexto, { sexo: sexoMRZ, dni: (ident && ident.verificada && ident.dni) || contexto.dni || (ident && ident.dni) });
+    const ctxC = Object.assign({}, contexto, { sexo: sexoMRZ, dni: contexto.dni || (ident && ident.verificada && ident.dni) || (ident && ident.dni) });
     const textosCuil = textosCuil0;
-    const cuil = textosCuil.map((t) => extraerCUIL(t, Object.assign({ estricto: true }, ctxC))).find(Boolean)
+    // un CUIL que cierra solo y coincide con el DNI que ya se conoce (del QR, del código de barras o de la MRZ) es el bueno
+    const midLibre = cuilLibre ? cuilLibre.split('-')[1].replace(/^0+/, '') : null;
+    const dniConocidos = [contexto.dni, ident && ident.dni].filter(Boolean).map((d) => String(d).replace(/\D/g, '').replace(/^0+/, ''));
+    const cuil = (midLibre && dniConocidos.includes(midLibre) ? cuilLibre : null)
+      || textosCuil.map((t) => extraerCUIL(t, Object.assign({ estricto: true }, ctxC))).find(Boolean)
       || textosCuil.map((t) => extraerCUIL(t, ctxC)).find(Boolean) || null;
     const tramite = tramiteDeTexto(zTra) || tramiteDeTexto(zCuil) || tramiteDeTexto(text);
 
@@ -1231,6 +1344,7 @@ const DomicilioOCR = (() => {
 
   return {
     leer: (...a) => enCola(() => leer(...a)),
+    leerReversoRapido: (...a) => enCola(() => leerReversoRapido(...a)),
     leerTexto: (...a) => enCola(() => leerTexto(...a)),
     leerFrente: (...a) => enCola(() => leerFrente(...a)),
     cancelarFrente,

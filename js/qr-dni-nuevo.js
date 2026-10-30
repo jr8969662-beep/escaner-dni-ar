@@ -109,7 +109,7 @@ const QRDNINuevo = (() => {
         const ctx = c.getContext('2d', { willReadFrequently: true });
         ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
         ctx.drawImage(canvas, sx, sy, sw, sh, 0, 0, w, h);
-        const r = await lectorHilo.leer(c, ['qr'], 8000)
+        const r = await lectorHilo.leer(c, ['qr'], 8000, !enVivo || [1, 2].includes(llamadasFrame % 4))   /* en vivo, el realce (más pesado) solo en las pruebas a tamaño original */
         if (!hiloOk()) return undefined;   // el hilo se cayó: que siga el lector de siempre
         const datos = r && parsear(r.texto);
         if (datos) {

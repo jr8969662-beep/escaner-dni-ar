@@ -31,7 +31,7 @@ const Decodificador = (() => {
       try { w && w.terminate(); } catch (e) { /* nada */ }
     }
 
-    function leer(fuente, tipos, timeoutMs = 6000) {
+    function leer(fuente, tipos, timeoutMs = 6000, mejorar = true) {
       if (!ok || !fuente) return Promise.resolve(null);
       let img;
       try {
@@ -42,7 +42,7 @@ const Decodificador = (() => {
       return new Promise((res) => {
         const t = setTimeout(() => { if (pend.has(id)) { pend.delete(id); res(null); } }, timeoutMs);
         pend.set(id, (d) => { clearTimeout(t); res(d && d.texto ? d : null); });
-        try { w.postMessage({ id, w: img.width, h: img.height, buf: img.data.buffer, tipos }, [img.data.buffer]); }
+        try { w.postMessage({ id, w: img.width, h: img.height, buf: img.data.buffer, tipos, mejorar }, [img.data.buffer]); }
         catch (e) { pend.delete(id); clearTimeout(t); res(null); }
       });
     }
