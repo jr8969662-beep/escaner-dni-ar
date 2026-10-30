@@ -417,7 +417,7 @@
       setTimeout(() => { if (ultimoResultado) abrirModalDomicilio(); }, 700);
       return;
     }
-    setTimeout(completarDesdeFrente, 2500);
+    setTimeout(completarDesdeFrente, 2500); precargarMotorMRZ();
     if (paisSeleccionado === 'arg' && escaneoEstado) escaneoEstado.textContent = '✅ Frente OK · tocá "Escanear reverso" para domicilio y CUIL';
   }
 
@@ -559,7 +559,7 @@
         const datos = parsearSeguro(texto);
         ultimaFotoDataUrl = src;
         
-        if (datos && (datos.dni || datos.numero || datos.apellido || datos.nombre)) { render(datos); if (estado) { estado.textContent = '✓ ' + (datos.nombreCompleto || datos.dni || datos.numero); estado.classList.remove('error'); estado.classList.add('ok'); } if (escaneoEstado) escaneoEstado.textContent = '✅ Escaneo OK'; setStatus('Escaneo OK', 'active'); if (btnRepetir) btnRepetir.hidden = false; reproducirSonidoExito(); vibrarExito(); setTimeout(completarDesdeFrente, 2500); return; }
+        if (datos && (datos.dni || datos.numero || datos.apellido || datos.nombre)) { render(datos); if (estado) { estado.textContent = '✓ ' + (datos.nombreCompleto || datos.dni || datos.numero); estado.classList.remove('error'); estado.classList.add('ok'); } if (escaneoEstado) escaneoEstado.textContent = '✅ Escaneo OK'; setStatus('Escaneo OK', 'active'); if (btnRepetir) btnRepetir.hidden = false; reproducirSonidoExito(); vibrarExito(); setTimeout(completarDesdeFrente, 2500); precargarMotorMRZ(); return; }
         mostrarErrorDocumento('Documento no reconocido', `No pudimos interpretar este código como un documento de ${paisElegidoNombre}.`); if (estado) { estado.textContent = '⚠️ No se pudieron extraer datos'; estado.classList.add('error'); } setStatus('Sin datos', 'error'); if (btnRepetir) btnRepetir.hidden = false; reproducirSonidoError(); vibrarError();
       }; 
       imageEl.onerror = () => { mostrarToast('No se pudo abrir la imagen', 'error'); setStatus('Error', 'error'); };
@@ -1184,9 +1184,12 @@
     if (cameraHint) cameraHint.style.opacity = '0';
     setEstadoMarco('ok'); animarCaptura();
     let foto = frame;
+    // modo rápido (la foto viene de la cámara, recortada al marco): sin pasar a 4K, que trababa la cámara casi un segundo
+    const rapidoDir = !!(DomicilioOCR.leerReversoRapido && frame && frame.marcoRel);
+    if (rapidoDir && DomicilioOCR.precargarMRZ) DomicilioOCR.precargarMRZ();
     try {
       const w0 = video ? video.videoWidth : 0;
-      if (trackActual && trackActual.applyConstraints && w0 && w0 < 2500) {
+      if (!rapidoDir && trackActual && trackActual.applyConstraints && w0 && w0 < 2500) {
         if (escaneoEstado) escaneoEstado.textContent = '📸 Reverso detectado · sacando una foto en alta resolución…';
         await trackActual.applyConstraints({ width: { ideal: 3840 }, height: { ideal: 2160 } });
         await new Promise((res) => setTimeout(res, 900));
@@ -1202,11 +1205,22 @@
     if (escaneoEstado) escaneoEstado.textContent = '🔍 Leyendo el reverso…';
     try {
       const pQR = (typeof QRDNINuevo !== 'undefined') ? QRDNINuevo.decodificar(foto).catch(() => null) : Promise.resolve(null);
-      const res = await DomicilioOCR.leer(foto, 'arg', (p) => {
-        if (escaneoEstado) escaneoEstado.textContent = '🔍 Leyendo el reverso… ' + Math.round(p * 100) + '%';
-      }, { dni: ultimoResultado && (ultimoResultado.dni || ultimoResultado.numero), marcoRel: foto.marcoRel || null });
-      // si el texto ya terminó y el QR no apareció, se le da un instante más y se sigue (un DNI viejo no tiene QR)
-      const rq = await Promise.race([pQR, new Promise((ok) => setTimeout(() => ok(null), 700))]);
+      const prog = (p) => { if (escaneoEstado) escaneoEstado.textContent = '🔍 Leyendo el reverso… ' + Math.round(p * 100) + '%'; };
+      const dniConocido = ultimoResultado && (ultimoResultado.dni || ultimoResultado.numero);
+      let res = null, rq = null;
+      if (rapidoDir) {
+        // rápido: domicilio, lugar y CUIL + líneas <<< (DNI, nombres, sexo, vencimiento) en paralelo, y el QR en otro hilo
+        res = await DomicilioOCR.leerReversoRapido(foto, { dni: dniConocido, marcoRel: foto.marcoRel, conMRZ: true, esperarMRZ: true, mrzTextos: opciones.mrzTextos || [] }, prog);
+        rq = await Promise.race([pQR, new Promise((ok) => setTimeout(() => ok(null), 700))]);
+        const mi = res && res.identidad;
+        const conIdentidad = rq || (mi && mi.dni && mi.apellido && mi.checks && mi.checks.nacimiento);
+        if (!conIdentidad || !(res.domicilio || res.cuil)) res = null;   // no alcanzó: lectura completa
+      }
+      if (!res) {
+        res = await DomicilioOCR.leer(foto, 'arg', prog, { dni: dniConocido, marcoRel: foto.marcoRel || null });
+        // si el texto ya terminó y el QR no apareció, se le da un instante más y se sigue (un DNI viejo no tiene QR)
+        rq = rq || await Promise.race([pQR, new Promise((ok) => setTimeout(() => ok(null), 700))]);
+      }
       const m = res.identidad;
       if (!rq && !(m && m.dni && m.apellido)) { procesandoDNINuevo = false; if (opciones.siFalla) opciones.siFalla(); else abrirReversoDNINuevo(); return; }
       const mrzBuena = m && m.checks && m.checks.nacimiento && m.checks.vencimiento ? m : null;
@@ -1237,16 +1251,21 @@
   async function exitoDNINuevo(r, frame, origen) {
     if (procesandoDNINuevo) return;
     procesandoDNINuevo = true;
-    if (typeof DomicilioOCR !== 'undefined' && DomicilioOCR.cancelarFrente) DomicilioOCR.cancelarFrente();   // corta la lectura del frente en curso
+    // corta YA la lectura del frente que estuviera en curso (si no, el reverso esperaba a que terminara: varios segundos en el celular)
+    if (typeof DomicilioOCR !== 'undefined') { if (DomicilioOCR.abortarFrente) DomicilioOCR.abortarFrente(); else if (DomicilioOCR.cancelarFrente) DomicilioOCR.cancelarFrente(); }
     detectorNuevoActivo = false;
     if (stopScan) { stopScan(); stopScan = null; }
     if (cameraHint) cameraHint.style.opacity = '0';
     setEstadoMarco('ok'); animarCaptura();
-    // La letra del domicilio es muy chica: antes de apagar la cámara se pide la máxima resolución y se saca una foto nítida
+    // motor de las líneas <<< (sexo y vencimiento: el QR no los trae), se carga ya
+    const rapidoQR = !!DomicilioOCR.leerReversoRapido;
+    if (rapidoQR && DomicilioOCR.precargarMRZ) DomicilioOCR.precargarMRZ();
+    // Lectura completa (sin modo rápido): la letra del domicilio es chica, se saca una foto en máxima resolución.
+    // En modo rápido no: la resolución normal alcanza y cambiarla trababa la cámara casi un segundo.
     let tarjetaHi = null;
     try {
       const w0 = video ? video.videoWidth : 0;
-      if (trackActual && trackActual.applyConstraints && w0 && w0 < 2500) {
+      if (!rapidoQR && trackActual && trackActual.applyConstraints && w0 && w0 < 2500) {
         if (escaneoEstado) escaneoEstado.textContent = '📸 QR leído · sacando una foto en alta resolución…';
         await trackActual.applyConstraints({ width: { ideal: 3840 }, height: { ideal: 2160 } });
         await new Promise((res) => setTimeout(res, 900));
@@ -1282,9 +1301,13 @@
     try {
       const rect = QRDNINuevo.rectTarjeta(r.ubicacion, frame.width, frame.height);
       const tarjeta = tarjetaHi || (rect ? recortarRect(frame, rect) : frame);
-      const res = await DomicilioOCR.leer(tarjeta, 'arg', (p) => {
-        if (escaneoEstado) escaneoEstado.textContent = '🔍 Leyendo el reverso… ' + Math.round(p * 100) + '%';
-      }, { dni: r.datos.dni });
+      const prog = (p) => { if (escaneoEstado) escaneoEstado.textContent = '🔍 Leyendo domicilio, lugar y CUIL… ' + Math.round(p * 100) + '%'; };
+      // modo rápido: del texto solo domicilio, lugar de nacimiento y CUIL (+ líneas <<< para sexo y vencimiento, en paralelo)
+      // dónde está la tarjeta dentro del recorte (el recorte tiene un margen de más alrededor)
+      const c0 = rect && QRDNINuevo.rectTarjeta(r.ubicacion, frame.width, frame.height, 0);
+      const marcoRel = c0 && !tarjetaHi ? [(c0.x - rect.x) / rect.w, (c0.y - rect.y) / rect.h, (c0.x + c0.w - rect.x) / rect.w, (c0.y + c0.h - rect.y) / rect.h] : null;
+      let res = rapidoQR && rect ? await DomicilioOCR.leerReversoRapido(tarjeta, { dni: r.datos.dni, marcoRel, conMRZ: true, esperarMRZ: true }, prog) : null;
+      if (!res || !(res.domicilio || res.cuil)) res = await DomicilioOCR.leer(tarjeta, 'arg', prog, { dni: r.datos.dni });
 
       // La MRZ solo se usa si sus fechas pasan el control (si no, mejor dejar el campo vacío)
       const m = res.identidad;
@@ -1377,8 +1400,8 @@
       if (estable) { if (!estableDesdeMs) estableDesdeMs = ahora; } else estableDesdeMs = 0;
 
       // Sin código tras unos segundos con el DNI quieto: se prueba el frente del DNI nuevo por OCR
-      if (paisSeleccionado === 'arg' && detectorNuevoActivo && estableDesdeMs && ahora - estableDesdeMs > 600 &&
-          ahora - camInicioMs > 1500 && ahora - ultimoIntentoFrenteMs > 3500 && intentosFrenteAuto < 6 &&
+      if (paisSeleccionado === 'arg' && detectorNuevoActivo && estableDesdeMs && ahora - estableDesdeMs > 400 &&
+          ahora - camInicioMs > 900 && ahora - ultimoIntentoFrenteMs > 3500 && intentosFrenteAuto < 6 &&
           typeof FrenteDNI !== 'undefined' && typeof DomicilioOCR !== 'undefined' && DomicilioOCR.leerTexto) {
         intentosFrenteAuto++; ultimoIntentoFrenteMs = ahora;
         leerFrenteOCR({ auto: true });
@@ -1477,7 +1500,7 @@
     // ¿Es el reverso? (tiene las líneas con <<<): se pasa directo a leer el reverso en alta resolución
     if ((textosCrudos.esReverso || !datosF) && stream && ultimoResultado === resultadoPrevio && /[I1][D0O]ARG|<<<</.test(textosCrudos.join('\n').toUpperCase().replace(/\s/g, ''))) {
       if (escaneoEstado) escaneoEstado.textContent = '🔍 Es el reverso: leyendo QR, domicilio y CUIL…';
-      if (canvasF) leerReversoDirecto(canvasF); else abrirReversoDNINuevo();
+      if (canvasF) leerReversoDirecto(canvasF, { mrzTextos: textosCrudos.slice(0, 2) }); else abrirReversoDNINuevo();
       return;
     }
     if (!datosF) {
@@ -1516,7 +1539,11 @@
     if (escaneoEstado) escaneoEstado.textContent = faltan.length ? '⚠ No se leyó: ' + faltan.join(', ') + '. Escaneá el reverso para completarlo.' : (ultimaIdentidad && !avisos.length ? '✅ Frente verificado con el reverso' : '✅ Frente leído. Ahora tocá "Escanear reverso" para domicilio, CUIL y verificar los datos.');
     setStatus('Frente leído', 'active'); reproducirSonidoExito(); vibrarExito();
     if (btnRepetir) btnRepetir.hidden = false;
+    precargarMotorMRZ();
   }
+  // motor de las líneas <<< del reverso: se carga cuando el frente ya está leído (mientras se da vuelta el DNI),
+  // no antes: cargarlo durante la lectura del frente la hacía más lenta
+  function precargarMotorMRZ() { if (typeof DomicilioOCR !== 'undefined' && DomicilioOCR.precargarMRZ) setTimeout(() => DomicilioOCR.precargarMRZ(), 300); }
 
   // DNI viejo leído por PDF417: el código no trae el vencimiento; se completa leyendo el frente de la misma foto (sin frenar la cámara)
   async function completarDesdeFrente() {

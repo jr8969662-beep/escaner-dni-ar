@@ -281,6 +281,13 @@ const FrenteDNI = (() => {
       const g = grupos.find((gr) => similitud(gr[0], x) >= 0.8);
       if (g) g.push(x); else grupos.push([x]);
     });
+    // "RAMIRO" y "RAMIRO ERNESTO": la lectura corta es la larga con un nombre perdido (el OCR cortó el renglón),
+    // no otro nombre. Sus votos pasan al grupo largo: si no, ganaba el nombre solo y se perdía el segundo.
+    const extiende = (x, y) => x.startsWith(y + ' ') && x.slice(y.length + 1).split(' ').every((t) => t.length >= 3 || PARTICULAS.test(t));
+    grupos.forEach((gc) => {
+      const largo = grupos.find((gl) => gl !== gc && gl.length && extiende(gl[0], gc[0]));
+      if (largo) { gc.forEach(() => largo.push(largo[0])); gc.length = 0; }
+    });
     grupos.sort((a, b) => b.length - a.length);
     const g = grupos[0], cuenta = {};
     g.forEach((x) => { cuenta[x] = (cuenta[x] || 0) + 1; });
@@ -376,6 +383,8 @@ const FrenteDNI = (() => {
         // suelto típico de OCR ("CARI OS ALBERTC") y la MRZ diga casi lo mismo sin ese corte
         const cortos = (x) => x.split(' ').filter((t) => t.length <= 2 && !/^(DE|LA|EL|Y|DI|DA|DO|LE|DU)$/.test(t)).length;
         if (!ident.truncado && cortos(act) > cortos(ref) && similitud(ref, act) >= 0.75) datos[campo] = ref;
+        // el frente leyó un nombre solo y la MRZ trae ese mismo más otro ("RAMIRO" → "RAMIRO ERNESTO"): se completa
+        else if (campo === 'nombre' && ref.startsWith(act + ' ') && ref.slice(act.length + 1).split(' ').every((t) => t.length >= 3)) datos[campo] = ref;
         return;
       }
       if (similitud(ref, act) >= 0.6) datos[campo] = ref;

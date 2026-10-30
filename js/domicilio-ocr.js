@@ -63,6 +63,14 @@ const DomicilioOCR = (() => {
             progresoCb(etapaDesde + m.progress * (etapaHasta - etapaDesde));
           }
         }
+      }).then(async (w) => {
+        // primera lectura de calentamiento (chiquita): la primera de verdad tardaba 1-2 s de más inicializando el motor
+        try {
+          const c = document.createElement('canvas'); c.width = 160; c.height = 40;
+          const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, 160, 40); x.fillStyle = '#000'; x.font = '24px sans-serif'; x.fillText('DNI 123', 8, 30);
+          await w.recognize(c);
+        } catch (e) { /* nada */ }
+        return w;
       }).catch((e) => { workerPromise = null; throw e; });
     }
     return workerPromise;
@@ -212,6 +220,22 @@ const DomicilioOCR = (() => {
     const setPsm = (psm) => w.setParameters({ tessedit_char_whitelist: '', preserve_interword_spaces: '1', tessedit_pageseg_mode: psm });
 
     // 1) imagen completa, texto disperso, con posiciones
+    // 0) ¿es el REVERSO? Vistazo rápido (una fracción de la pasada completa) a la franja de abajo, donde van las líneas <<<:
+    //    si se apuntó el reverso, se avisa ya en vez de leer toda la tarjeta como frente (ahorraba varios segundos)
+    const relF = fuente && fuente.marcoRel;
+    if (relF) {
+      const H = relF[3] - relF[1];
+      const b0 = recortarRel(origen, relF[0], Math.max(0, relF[1] + 0.66 * H), relF[2], Math.min(1, relF[1] + 1.02 * H), 1, 4000, 8);
+      const kb = Math.min(1, 640 / b0.width), banda = document.createElement('canvas');   // (achicada: basta para ver los <<<)
+      banda.width = Math.round(b0.width * kb); banda.height = Math.round(b0.height * kb);
+      const bc = banda.getContext('2d'); bc.imageSmoothingQuality = 'high'; bc.drawImage(b0, 0, 0, banda.width, banda.height);
+      await w.setParameters(PARAMS_MRZ);
+      const tR = (await w.recognize(banda)).data.text || '';
+      if (/[I1][D0O]ARG|<<<<|ARG<</.test(tR.toUpperCase().replace(/\s/g, ''))) {
+        log('📄 vistazo: es el reverso\n' + tR);
+        await w.setParameters(PARAMS_TEXTO); textos.push(tR); textos.esReverso = true; return textos;
+      }
+    }
     etapa(0, 0.3);
     await setPsm('11');
     // (a menor resolución: las etiquetas son grandes y la pasada tarda la mitad; los datos se releen ampliados más abajo)
@@ -936,8 +960,39 @@ const DomicilioOCR = (() => {
     return (yy > new Date().getFullYear() % 100 ? 1900 : 2000) + yy;
   }
 
+    // apellido y nombres: votación entre todas las lecturas (la primera letra se pierde a veces: "NCHEZ" / "SANCHEZ")
+  function votarNombresMRZ(ident, textosMRZ, nombresL3 = []) {
+    if (ident) {
+      // (el renglón leído solo vale doble: ahí no se pierde la primera letra)
+      const cands = textosMRZ.concat(nombresL3.flatMap((t) => ['X\n' + t, 'X\n' + t])).map((t) => {
+        const l = String(t || '').toUpperCase().split(/[\r\n]+/).map(espaciosANombre).map((x) => x.replace(/[^A-Z0-9<]/g, '')).find((x) => /^[A-Z<]{3,}<<[A-Z<]+$/.test(x.replace(/[0-9]/g, '')) && (x.match(/\d/g) || []).length <= 2 && !/^[I1][D0O]ARG/.test(x));
+        if (!l || /ARG</.test(l)) return null;
+        // (relleno '<' mal leído al final: "<<<<S"; sin comerse la última letra de un nombre como CARLOS o JOSE)
+        const p = l.replace(/<<[<SKCE]*$/, '').replace(/<+$/, '').split('<<');
+        const letras = (x) => [...x].map((ch) => A_LETRA_NOMBRE[ch] || ch).join('');   // "RI0S" → "RIOS"
+        return p.length >= 2 ? { a: letras(p[0].replace(/^[0-9]+/, '')).replace(/</g, ' ').trim(), n: letras(p.slice(1).join(' ')).replace(/</g, ' ').replace(/\s+/g, ' ').trim() } : null;
+      }).filter((c) => c && c.a.length >= 2);
+      const votar = (vals) => {
+        const c = new Map(); vals.filter(Boolean).forEach((v) => c.set(v, (c.get(v) || 0) + 1));
+        // una lectura que es otra con letras de más al principio ("SANCHEZ" ⊃ "NCHEZ") suma esos votos
+        [...c.keys()].forEach((v) => [...c.keys()].forEach((x) => { if (x !== v && x.length > v.length && x.endsWith(v) && x.length - v.length <= 2) c.set(x, c.get(x) + c.get(v) + 0.5); }));
+        // "RAMIRO" ⊂ "RAMIRO ERNESTO": la lectura con el segundo nombre suma los votos de la que lo perdió
+        [...c.keys()].forEach((v) => [...c.keys()].forEach((x) => { if (x !== v && x.startsWith(v + ' ') && x.slice(v.length + 1).split(' ').every((t) => t.length >= 3)) c.set(x, c.get(x) + c.get(v) + 0.5); }));
+        return [...c.entries()].sort((p, q) => q[1] - p[1] || q[0].length - p[0].length)[0];
+      };
+      const va = votar(cands.map((c) => c.a)), vn = votar(cands.map((c) => c.n));
+      if (va && va[0] !== ident.apellido) { log('🗳 apellido por votación: ' + ident.apellido + ' → ' + va[0]); ident.apellido = va[0]; }
+      if (vn && vn[0] !== ident.nombre && vn[0].length >= (ident.nombre || '').length) ident.nombre = vn[0];
+    }
+    return ident;
+  }
+
+  // renglón de nombres: un espacio entre dos palabras es un '<' que el OCR no vio ("RAMIRO ERNESTO" → RAMIRO<ERNESTO);
+  // sin esto los dos nombres quedaban pegados en uno solo
+  const espaciosANombre = (l) => (/<</.test(l) && (l.match(/\d/g) || []).length <= 2 && !/[I1][D0O]ARG/.test(l.replace(/\s/g, '')))
+    ? l.trim().replace(/([A-Z])\s+(?=[A-Z])/g, '$1<') : l;
   function extraerMRZCompleta(texto) {
-    const lineas = (texto || '').toUpperCase().split(/[\r\n]+/)
+    const lineas = (texto || '').toUpperCase().split(/[\r\n]+/).map(espaciosANombre)
       .map(l => l.replace(/[^A-Z0-9<]/g, '')).filter(l => l.length >= 15);
 
     // Línea 2
@@ -971,8 +1026,10 @@ const DomicilioOCR = (() => {
 
     // Línea 3 (nombres)
     let apellido = null, nombre = null, truncado = false;
-    const l3 = lineas.find(l => l !== l2orig && l !== l1orig && l.includes('<<') && (l.match(/\d/g) || []).length <= 2);
+    let l3 = lineas.find(l => l !== l2orig && l !== l1orig && l.includes('<<') && (l.match(/\d/g) || []).length <= 2);
     if (l3) {
+      // (un dígito suelto al principio es ruido del borde: "1LOPEZ<<LUCIA")
+      if (/^[0-9][A-Z]{2}/.test(l3)) l3 = l3.replace(/^[0-9]+/, '');
       // el relleno '<' a veces se lee como S, K o C al final: "ERNESTO<<<<<<S" -> "ERNESTO"
       const limpio = [...l3].map(ch => A_LETRA_NOMBRE[ch] || ch).join('').replace(/<<[<SKCE]*$/, '<<').replace(/<{2,}[SKCE]{1,2}$/, '');
       const partes = limpio.split('<<');
@@ -1038,10 +1095,18 @@ const DomicilioOCR = (() => {
     if (contexto.conMRZ) {
       const wm = await initWorkerMRZ();
       if (wm) pMRZ = enColaMRZ(async () => {
-        const img = await preprocesar(franja(-0.03, 0.58, 1.03, 1.05, 1, 1900), 'fondo');
-        const { data: { text } } = await wm.recognize(img);
-        raw += '\n--- MRZ (OCR-B) ---\n' + (text || ''); log('⚡ MRZ:\n' + text);
-        return text || '';
+        // reverso solo (esperarMRZ): si los dígitos de control no cierran, otra variante de la imagen (hasta 3)
+        const variantes = contexto.esperarMRZ ? [['fondo', 1900], [undefined, 1900], ['fondo', 2400]] : [['fondo', 1900]];
+        const todos = [];
+        for (const [modo, an] of variantes) {
+          const img = await preprocesar(franja(-0.03, 0.58, 1.03, 1.05, an > 1900 ? 1.4 : 1, an), modo);
+          const { data: { text } } = await wm.recognize(img);
+          raw += '\n--- MRZ (OCR-B) ---\n' + (text || ''); log('⚡ MRZ:\n' + text);
+          todos.push(text || '');
+          const id = extraerMRZCompleta(text || '');
+          if (id && id.verificada) break;
+        }
+        return todos;
       });
     }
     await w.setParameters(PARAMS_ZONA);
@@ -1101,8 +1166,22 @@ const DomicilioOCR = (() => {
     let mrz = null, identidad = null;
     if (contexto.conMRZ) {
       // (no frena: si las líneas <<< no terminaron poco después que el resto, se sigue sin ellas)
-      const tM = pMRZ ? await Promise.race([pMRZ, new Promise((ok) => setTimeout(() => ok(''), 1500))]) : '';
-      if (tM) { mrz = extraerDesdeMRZ(tM); identidad = extraerMRZCompleta(tM); }
+      // (con contexto.esperarMRZ —reverso solo, sin frente— se espera: de ahí salen DNI, sexo y vencimiento)
+      let tMs = !pMRZ ? [] : contexto.esperarMRZ ? await pMRZ : await Promise.race([pMRZ, new Promise((ok) => setTimeout(() => ok([]), 1500))]);
+      if (!pMRZ && contexto.esperarMRZ) {   // sin el motor OCR-B: con el de siempre
+        await w.setParameters(PARAMS_MRZ);
+        const t = (await w.recognize(await preprocesar(franja(-0.03, 0.58, 1.03, 1.05, 1, 1900), 'fondo'))).data.text || '';
+        raw += '\n--- MRZ ---\n' + t; tMs = [t];
+      }
+      // (más las lecturas que ya se tenían, por ej. el vistazo que detectó el reverso): la mejor, y los nombres por votación
+      const tTodos = (tMs || []).concat(contexto.mrzTextos || []).filter(Boolean);
+      if (tTodos.length) {
+        const ms = tTodos.map(extraerDesdeMRZ);
+        mrz = ms.find((x) => x.mrzVerificada) || ms.find((x) => x.fechaVencimiento) || ms[0];
+        identidad = votarNombresMRZ(tTodos.map(extraerMRZCompleta).reduce(mejorIdentidad, null), tTodos);
+      }
+      // sin DNI conocido, el CUIL se valida con el de la MRZ
+      if (!cuil && !ctx.dni && identidad && identidad.dni && identidad.checks && identidad.checks.documento) { ctx.dni = identidad.dni; cuil = cuilDe(textosCuil); }
     }
     await w.setParameters(PARAMS_TEXTO);
     if (progresoCb) progresoCb(1);
@@ -1296,25 +1375,7 @@ const DomicilioOCR = (() => {
     if (pMRZ) await pMRZ;
     let mrz = textosMRZ.map(extraerDesdeMRZ).find((x) => x.mrzVerificada) || textosMRZ.map(extraerDesdeMRZ).find((x) => x.fechaVencimiento) || extraerDesdeMRZ(text);
     let ident = textosMRZ.map(extraerMRZCompleta).reduce(mejorIdentidad, null);
-    // apellido y nombres: votación entre todas las lecturas (la primera letra se pierde a veces: "NCHEZ" / "SANCHEZ")
-    if (ident) {
-      // (el renglón leído solo vale doble: ahí no se pierde la primera letra)
-      const cands = textosMRZ.concat(nombresL3.flatMap((t) => ['X\n' + t, 'X\n' + t])).map((t) => {
-        const l = String(t || '').toUpperCase().split(/[\r\n]+/).map((x) => x.replace(/[^A-Z0-9<]/g, '')).find((x) => /^[A-Z<]{3,}<<[A-Z<]+$/.test(x.replace(/[0-9]/g, '')) && (x.match(/\d/g) || []).length <= 2 && !/^[I1][D0O]ARG/.test(x));
-        if (!l || /ARG</.test(l)) return null;
-        const p = l.replace(/[<SKCE]*$/, '').split('<<');
-        return p.length >= 2 ? { a: p[0].replace(/</g, ' ').trim(), n: p.slice(1).join(' ').replace(/</g, ' ').replace(/\s+/g, ' ').trim() } : null;
-      }).filter((c) => c && c.a.length >= 2);
-      const votar = (vals) => {
-        const c = new Map(); vals.filter(Boolean).forEach((v) => c.set(v, (c.get(v) || 0) + 1));
-        // una lectura que es otra con letras de más al principio ("SANCHEZ" ⊃ "NCHEZ") suma esos votos
-        [...c.keys()].forEach((v) => [...c.keys()].forEach((x) => { if (x !== v && x.length > v.length && x.endsWith(v) && x.length - v.length <= 2) c.set(x, c.get(x) + c.get(v) + 0.5); }));
-        return [...c.entries()].sort((p, q) => q[1] - p[1] || q[0].length - p[0].length)[0];
-      };
-      const va = votar(cands.map((c) => c.a)), vn = votar(cands.map((c) => c.n));
-      if (va && va[0] !== ident.apellido) { log('🗳 apellido por votación: ' + ident.apellido + ' → ' + va[0]); ident.apellido = va[0]; }
-      if (vn && vn[0] !== ident.nombre && vn[0].length >= (ident.nombre || '').length) ident.nombre = vn[0];
-    }
+    votarNombresMRZ(ident, textosMRZ, nombresL3);
 
     // Un CUIL que cierra solo con su dígito verificador trae el DNI bien: corrige un número de la MRZ mal leído
     // ("25122159" por "25122169"), siempre que el dígito de control de la MRZ también cierre con el corregido.
