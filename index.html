@@ -97,6 +97,18 @@
     </div>
   </section>
 
+  <section class="tipo-dni" id="tipo-dni" aria-label="Tipo de DNI">
+    <span class="tipo-dni-label">Tipo de DNI</span>
+    <div class="tipo-dni-opciones" role="radiogroup">
+      <button type="button" class="tipo-dni-btn" data-tipo="viejo" role="radio" aria-checked="false">
+        <span class="tipo-dni-nombre">DNI viejo</span><span class="tipo-dni-desc">código de barras</span>
+      </button>
+      <button type="button" class="tipo-dni-btn" data-tipo="nuevo" role="radio" aria-checked="false">
+        <span class="tipo-dni-nombre">DNI nuevo</span><span class="tipo-dni-desc">QR atrás</span>
+      </button>
+    </div>
+  </section>
+
   <section class="card camera-card">
     <div class="camera-viewport" id="captura-dni">
       <video id="scan-video" autoplay playsinline muted></video>
@@ -169,7 +181,10 @@
           <p class="result-subtitle" id="result-pais">Lectura completa</p>
         </div>
       </div>
-      <span class="badge" id="badge-metodo">—</span>
+      <div class="result-badges">
+        <span class="badge badge-tipo" id="badge-tipo" hidden>—</span>
+        <span class="badge" id="badge-metodo">—</span>
+      </div>
     </div>
 
     <div class="main-number-block">

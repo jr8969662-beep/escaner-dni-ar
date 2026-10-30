@@ -660,6 +660,10 @@ const DomicilioOCR = (() => {
     // basura antes del domicilio ("O AV. JUJUY", "RA. AV. BELGRANO"): pedazos de 1-2 letras que no son AV, B°, etc.
     s = s.replace(/^(?:(?!AV\b|B°|Vª|V\s[A-Z]{3}|PJE\b|DR\b|SN\b)[A-Z]{1,2}[.,:;]?\s)+(?=[A-Z0-9])/, '');
     s = s.replace(/^V\s(?=[A-Z]{3})/, 'Vª ');
+    // resto de la etiqueta de 3-5 letras pegado antes de una palabra que siempre abre un domicilio ("ICI AV. JUJUY", "MECA AV.")
+    s = s.replace(/^(?!AV\b|MZA\b|PJE\b|BV\b|DR\b)[A-Z]{3,5}[.,:;]?\s+(?=(?:AV\.?|AVENIDA|CALLE|MZA|MANZANA|PJE|PASAJE|BV|BOULEVARD|RUTA|B°)\s)/, '');
+    // "JUAN PABLO L -" / "JUAN PABLO I -": el número romano II con una sola raya leída
+    s = s.replace(/\bPABLO\s(?:L|I|1)(?=\s*-|\s*$)/g, 'PABLO II');
     s = s.replace(/\s[.,]\s(?=[A-Z]{3})/g, ' - ');                                  // "CARLOS . SALTA" -> "CARLOS - SALTA"
     s = s.replace(/(\s-)+\s-\s/g, ' - ').replace(/\s-\s(?!DE\b|LA\b|EL\b)[A-Z]{1,2}\s(?=[A-ZÁÉÍÓÚÑ]{4,}$)/, ' - ');   // "SALTA - - MO SALTA"
     s = s.replace(/\s*-\s*/g, ' - ').replace(/\s{2,}/g, ' ').replace(/^[\s\-.,:]+|[\s\-.,:]+$/g, '');

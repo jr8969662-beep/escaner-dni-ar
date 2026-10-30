@@ -136,6 +136,22 @@ html, body { overflow-x: hidden; }
 .chip-tag { font-size: 9px; letter-spacing: .08em; text-transform: uppercase; padding: 2px 5px; border-radius: 4px; background: var(--blue-soft); color: var(--blue); }
 @keyframes chipPulse { 0%, 100% { box-shadow: 0 0 0 0 transparent; } 50% { box-shadow: 0 0 0 4px rgba(201, 162, 39, .5); } }
 
+/* ---------- Tipo de DNI (viejo / nuevo) ---------- */
+.tipo-dni { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; }
+.tipo-dni[hidden] { display: none; }
+.tipo-dni-label { display: block; font-size: 12px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; color: var(--accent); margin-bottom: 10px; }
+.tipo-dni-opciones { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.tipo-dni-btn {
+  display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 10px 8px; min-height: 52px;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--radius-sm); color: var(--text-secondary); cursor: pointer;
+}
+.tipo-dni-nombre { font-size: 15px; font-weight: 800; }
+.tipo-dni-desc { font-size: 11px; color: var(--text-muted); }
+.tipo-dni-btn.active { color: var(--text); border-color: var(--accent); background: var(--accent-soft); box-shadow: inset 0 -2px 0 var(--accent); }
+.tipo-dni-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.result-badges { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.badge-tipo { background: var(--accent-soft); border-color: var(--accent); color: var(--text); }
+
 /* ---------- Cámara ---------- */
 .camera-viewport {
   position: relative; width: 100%; aspect-ratio: 4 / 3; max-height: 62vh; background: #000; overflow: hidden;
