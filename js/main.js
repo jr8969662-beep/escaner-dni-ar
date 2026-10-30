@@ -417,7 +417,7 @@
       setTimeout(() => { if (ultimoResultado) abrirModalDomicilio(); }, 700);
       return;
     }
-    setTimeout(completarDesdeFrente, 500);
+    setTimeout(completarDesdeFrente, 2500);
     if (paisSeleccionado === 'arg' && escaneoEstado) escaneoEstado.textContent = '✅ Frente OK · tocá "Escanear reverso" para domicilio y CUIL';
   }
 
@@ -559,7 +559,7 @@
         const datos = parsearSeguro(texto);
         ultimaFotoDataUrl = src;
         
-        if (datos && (datos.dni || datos.numero || datos.apellido || datos.nombre)) { render(datos); if (estado) { estado.textContent = '✓ ' + (datos.nombreCompleto || datos.dni || datos.numero); estado.classList.remove('error'); estado.classList.add('ok'); } if (escaneoEstado) escaneoEstado.textContent = '✅ Escaneo OK'; setStatus('Escaneo OK', 'active'); if (btnRepetir) btnRepetir.hidden = false; reproducirSonidoExito(); vibrarExito(); setTimeout(completarDesdeFrente, 500); return; }
+        if (datos && (datos.dni || datos.numero || datos.apellido || datos.nombre)) { render(datos); if (estado) { estado.textContent = '✓ ' + (datos.nombreCompleto || datos.dni || datos.numero); estado.classList.remove('error'); estado.classList.add('ok'); } if (escaneoEstado) escaneoEstado.textContent = '✅ Escaneo OK'; setStatus('Escaneo OK', 'active'); if (btnRepetir) btnRepetir.hidden = false; reproducirSonidoExito(); vibrarExito(); setTimeout(completarDesdeFrente, 2500); return; }
         mostrarErrorDocumento('Documento no reconocido', `No pudimos interpretar este código como un documento de ${paisElegidoNombre}.`); if (estado) { estado.textContent = '⚠️ No se pudieron extraer datos'; estado.classList.add('error'); } setStatus('Sin datos', 'error'); if (btnRepetir) btnRepetir.hidden = false; reproducirSonidoError(); vibrarError();
       }; 
       imageEl.onerror = () => { mostrarToast('No se pudo abrir la imagen', 'error'); setStatus('Error', 'error'); };
@@ -586,10 +586,14 @@
   
   async function abrirModalDomicilio() {
     if (!ultimoResultado && !modoReversoNuevo) { mostrarToast('Primero escaneá el frente', 'error'); return; }
+    // si el frente todavía se está completando (DNI viejo), se corta ya: el reverso no espera (el vencimiento sale de las líneas <<<)
+    if (!modoReversoNuevo && ocrFrenteEnCurso && typeof DomicilioOCR !== 'undefined' && DomicilioOCR.abortarFrente) DomicilioOCR.abortarFrente();
     
     // 🔥 PRECARGA TESSERACT
     if (typeof DomicilioOCR !== 'undefined' && DomicilioOCR.precargar) {
       DomicilioOCR.precargar().catch(console.warn);
+      // motor de las líneas <<< (sexo / vencimiento que no vinieron con el frente): se carga mientras se abre la cámara
+      if (ultimoResultado && (!ultimoResultado.sexo || !ultimoResultado.fechaVencimiento) && DomicilioOCR.precargarMRZ) DomicilioOCR.precargarMRZ();
     }
 
     if (modalDomicilio) modalDomicilio.hidden = false; if (domicilioPreview) domicilioPreview.hidden = true; if (domicilioResultado) domicilioResultado.hidden = true; if (domicilioProgress) domicilioProgress.hidden = true;
@@ -906,27 +910,33 @@
       if (btnCapturarDomicilio) btnCapturarDomicilio.hidden = false;
       return;
     }
-    if (typeof subirResolucion === 'function') await subirResolucion();
+    const dniF0 = ultimoResultado && (ultimoResultado.dni || ultimoResultado.numero);
+    const rapido = !modoReversoNuevo && dniF0 && paisSeleccionado === 'arg' && DomicilioOCR.leerReversoRapido;
+    // la lectura del frente que quedaba completando datos (DNI viejo) no hace esperar al reverso: el vencimiento sale de las líneas <<<
+    if (rapido && ocrFrenteEnCurso && DomicilioOCR.cancelarFrente) DomicilioOCR.cancelarFrente();
+    // (modo rápido: la resolución normal alcanza y es mucho más liviana; se sube solo si el 1.er intento no leyó)
+    if (!rapido && typeof subirResolucion === 'function') await subirResolucion();
 
     // ===== MODO RÁPIDO: el frente ya se leyó (DNI viejo o nuevo) → del reverso solo hacen falta domicilio,
     // lugar de nacimiento y CUIL. Sin MRZ ni QR: dos franjas de la tarjeta, cuadro tras cuadro, hasta tener los tres.
     const dniFrente = ultimoResultado && (ultimoResultado.dni || ultimoResultado.numero);
     // (si solo se leyó el QR del reverso, faltan el sexo y el vencimiento: se leen también las líneas <<<, en paralelo)
-    if (!modoReversoNuevo && dniFrente && paisSeleccionado === 'arg' && DomicilioOCR.leerReversoRapido) {
+    if (rapido) {
       const conMRZ = !ultimoResultado.sexo || !ultimoResultado.fechaVencimiento;
       const sx = String((ultimoResultado && ultimoResultado.sexo) || '');
       const sexo = /^F/i.test(sx) ? 'F' : /^M/i.test(sx) ? 'M' : null;
       const acumR = {}; let rawR = '', mejorR = null, domLimpio = false, identR = null;
       const MAX_R = 4;
       // se corta apenas están los tres (con el domicilio limpio, o ya en el 2.º intento)
-      const listoR = (intento) => acumR.domicilio && acumR.cuil && acumR.lugarNacimiento && (domLimpio || intento > 2) &&
-        (!conMRZ || (identR && identR.sexo && acumR.fechaVencimiento) || intento > 3);
+      const listoR = (intento) => acumR.domicilio && acumR.cuil && acumR.lugarNacimiento && (domLimpio || intento > 1);
+      let subida = false;
       for (let intento = 1; intento <= MAX_R && autoScanActivo && !listoR(intento); intento++) {
         if (domicilioProgressText) domicilioProgressText.textContent = `Leyendo domicilio, lugar de nacimiento y CUIL… (${intento})`;
         if (domicilioProgressFill) domicilioProgressFill.style.width = '0%';
+        if (intento > 1 && !subida && !(acumR.domicilio && domLimpio) && typeof subirResolucion === 'function') { subida = true; await subirResolucion(); }
         const c = await capturarMasNitidoRecortado(2, 60);
         try {
-          const r = await DomicilioOCR.leerReversoRapido(c, { dni: dniFrente, sexo, marcoRel: c.marcoRel || null, conMRZ: conMRZ && !(identR && identR.sexo && acumR.fechaVencimiento) }, (p) => {
+          const r = await DomicilioOCR.leerReversoRapido(c, { dni: dniFrente, sexo, marcoRel: c.marcoRel || null, conMRZ: conMRZ && intento <= 2 && !(identR && identR.sexo && acumR.fechaVencimiento), intento }, (p) => {
             if (domicilioProgressFill) domicilioProgressFill.style.width = (p * 100) + '%';
           });
           if (!autoScanActivo) break;
@@ -1512,6 +1522,8 @@
   async function completarDesdeFrente() {
     const d = ultimoResultado;
     if (!d || paisSeleccionado !== 'arg' || d.metodo === 'ocr frente' || d.formatoQR === 'nuevo' || ocrFrenteEnCurso) return;
+    // (si ya se está escaneando el reverso, no: lo que falta sale de ahí, y el reverso no tiene que esperar)
+    if (modalDomicilio && !modalDomicilio.hidden) return;
     if (d.fechaVencimiento && d.nacionalidad && d.tramite && d.ejemplar && d.fechaEmision) return;
     if (!ultimaFotoDataUrl || typeof FrenteDNI === 'undefined' || typeof DomicilioOCR === 'undefined' || !DomicilioOCR.leerFrente) return;
     ocrFrenteEnCurso = true;

@@ -179,8 +179,27 @@ const DomicilioOCR = (() => {
   function enCola(fn) { const p = cola.then(fn, fn); cola = p.catch(() => {}); return p; }
   // Corta la lectura del frente en curso (por ej. porque apareció el QR del reverso): devuelve lo que tenga hasta ahí
   function cancelarFrente() { generacionFrente++; }
+  // Corta YA la lectura del frente (aunque esté a mitad de una pasada): se apaga ese motor y se arranca otro.
+  // Para el reverso es mucho más rápido que esperar que termine (en el celular, una pasada del frente tarda varios segundos).
+  let frenteEnCurso = 0, cortarFrente = null;
+  function abortarFrente() {
+    generacionFrente++;
+    if (!frenteEnCurso || !workerPromise || !cortarFrente) return false;
+    const wp = workerPromise; workerPromise = null;
+    cortarFrente(new Error('frente cortado'));   // libera la cola ya (la tarea vieja queda colgada en el motor apagado)
+    wp.then((w) => w.terminate()).catch(() => {});
+    initWorker().catch(() => {});   // el nuevo se va cargando ya
+    return true;
+  }
 
   async function leerFrente(fuente, onProgress, suficiente) {
+    frenteEnCurso++;
+    const corte = new Promise((_, rej) => { cortarFrente = rej; });
+    const tarea = leerFrenteInterno(fuente, onProgress, suficiente);
+    tarea.catch(() => {});
+    try { return await Promise.race([tarea, corte]); } finally { frenteEnCurso--; cortarFrente = null; }
+  }
+  async function leerFrenteInterno(fuente, onProgress, suficiente) {
     const gen = generacionFrente;
     const cancelado = () => gen !== generacionFrente;
     progresoCb = typeof onProgress === 'function' ? onProgress : null;
@@ -1019,7 +1038,7 @@ const DomicilioOCR = (() => {
     if (contexto.conMRZ) {
       const wm = await initWorkerMRZ();
       if (wm) pMRZ = enColaMRZ(async () => {
-        const img = await preprocesar(franja(-0.03, 0.58, 1.03, 1.05, 1, 2400), 'fondo');
+        const img = await preprocesar(franja(-0.03, 0.58, 1.03, 1.05, 1, 1900), 'fondo');
         const { data: { text } } = await wm.recognize(img);
         raw += '\n--- MRZ (OCR-B) ---\n' + (text || ''); log('⚡ MRZ:\n' + text);
         return text || '';
@@ -1027,10 +1046,13 @@ const DomicilioOCR = (() => {
     }
     await w.setParameters(PARAMS_ZONA);
     // franja de arriba (domicilio en 1-2 renglones + lugar de nacimiento), ampliada: letra de unos 30 px
-    const top = franja(-0.02, -0.07, 0.88, 0.33, Math.min(3, 2300 / (ancho * 0.9)), 2300);
+    // (tamaño justo: letra de unos 24 px. Más grande no lee mejor y en el celular tarda el doble)
+    // (si el 1.er intento no alcanzó, los siguientes más grandes: más lentos pero aguantan mejor una foto borrosa)
+    const extra = (contexto.intento || 1) > 1, AT = extra ? 2300 : 1800, AC = extra ? 1700 : 1300;
+    const top = franja(-0.02, -0.07, 0.88, 0.33, Math.min(3, AT / (ancho * 0.9)), AT);
     const tTop = await leerZona(await preprocesar(top), 'franja domicilio y lugar', 0, 0.45);
     // franja del CUIL
-    const cu = franja(-0.02, 0.40, 0.66, 0.70, Math.min(3, 1700 / (ancho * 0.68)), 1700);
+    const cu = franja(-0.02, 0.40, 0.66, 0.70, Math.min(3, AC / (ancho * 0.68)), AC);
     const tCuil = await leerZona(await preprocesar(cu), 'franja CUIL', 0.45, 0.7);
 
     const dniPad = String(contexto.dni || '').replace(/\D/g, '');
@@ -1066,23 +1088,21 @@ const DomicilioOCR = (() => {
     const textosTop = [tTop], textosCuil = [tCuil, tTop];
     let domicilio = domDe(textosTop), cuil = cuilDe(textosCuil);
     // si algo quedó dudoso, la misma franja en blanco y negro (umbral local): con fotos reales suele leer más limpio
-    if (!limpia(domicilio)) {
-      textosTop.push(await leerZona(binarizarCanvas(franja(-0.02, -0.07, 0.88, 0.33, Math.min(3, 2300 / (ancho * 0.9)), 2300)), 'franja domicilio (blanco y negro)', 0.7, 0.88));
+    // (en el 1.er intento solo si no salió nada: suele convenir más otro cuadro de la cámara)
+    if (extra ? !limpia(domicilio) : !domicilio) {
+      textosTop.push(await leerZona(binarizarCanvas(franja(-0.02, -0.07, 0.88, 0.33, Math.min(3, AT / (ancho * 0.9)), AT)), 'franja domicilio (blanco y negro)', 0.7, 0.88));
       domicilio = domDe(textosTop);
     }
     if (!cuil) {
-      textosCuil.push(await leerZona(binarizarCanvas(franja(-0.02, 0.40, 0.66, 0.70, Math.min(3, 1700 / (ancho * 0.68)), 1700)), 'franja CUIL (blanco y negro)', 0.88, 1));
+      textosCuil.push(await leerZona(binarizarCanvas(franja(-0.02, 0.40, 0.66, 0.70, Math.min(3, AC / (ancho * 0.68)), AC)), 'franja CUIL (blanco y negro)', 0.88, 1));
       cuil = cuilDe(textosCuil);
     }
     const lugar = lugDe(textosTop, domicilio);
     let mrz = null, identidad = null;
     if (contexto.conMRZ) {
-      let tM = pMRZ ? await pMRZ : null;
-      if (tM === null) {   // sin el motor OCR-B: con el de siempre
-        await w.setParameters(PARAMS_MRZ);
-        tM = (await w.recognize(await preprocesar(franja(-0.03, 0.58, 1.03, 1.05, 1.3, 2600), 'fondo'))).data.text || '';
-      }
-      mrz = extraerDesdeMRZ(tM); identidad = extraerMRZCompleta(tM);
+      // (no frena: si las líneas <<< no terminaron poco después que el resto, se sigue sin ellas)
+      const tM = pMRZ ? await Promise.race([pMRZ, new Promise((ok) => setTimeout(() => ok(''), 1500))]) : '';
+      if (tM) { mrz = extraerDesdeMRZ(tM); identidad = extraerMRZCompleta(tM); }
     }
     await w.setParameters(PARAMS_TEXTO);
     if (progresoCb) progresoCb(1);
@@ -1348,6 +1368,8 @@ const DomicilioOCR = (() => {
     leerTexto: (...a) => enCola(() => leerTexto(...a)),
     leerFrente: (...a) => enCola(() => leerFrente(...a)),
     cancelarFrente,
+    abortarFrente,
+    precargarMRZ: () => { initWorkerMRZ(); },
     pareceReverso,
     precargar,
     liberar,
