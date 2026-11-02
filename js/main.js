@@ -1784,21 +1784,23 @@
     let foto = null;
     try { foto = await sacarFotoNitida(); } catch (e) { console.warn('Foto:', e); }
     if (!foto || !stream) { procesandoFoto = false; if (stream) reanudarTrasFoto(); return; }
-    // la foto queda en pantalla mientras se lee
-    try { ultimaFotoDataUrl = foto.toDataURL('image/jpeg', 0.92); if (img) { img.src = ultimaFotoDataUrl; img.hidden = false; } if (video) video.hidden = true; } catch (e) { /* nada */ }
+    // la foto queda en pantalla mientras se lee (se codifica aparte, sin frenar la lectura)
+    try { foto.toBlob((b) => { if (b && img && procesandoFoto) { const u = URL.createObjectURL(b); img.onload = () => { try { URL.revokeObjectURL(u); } catch (e) { /* nada */ } }; img.src = u; img.hidden = false; if (video) video.hidden = true; } }, 'image/jpeg', 0.85); } catch (e) { /* nada */ }
     if (btnFoto) btnFoto.hidden = true;
     if (escaneoEstado) escaneoEstado.textContent = '🔍 Leyendo la foto…';
     const previo = ultimoResultado;
+    // 1) texto: el frente se lee; si la foto es el reverso, lo detecta enseguida (líneas <<<) y pasa a leer QR + domicilio + CUIL
+    //    (el QR NO se lee a la vez: competía por el procesador y atrasaba la lectura del frente)
+    const rOCR = await leerFrenteOCR({ foto }).catch(() => 'fallo');
+    // 2) solo si el texto no pudo con la foto: se prueba el QR (reverso con las líneas <<< poco legibles)
     let huboQR = false;
-    // QR (reverso) y texto (frente) a la vez: el QR corre en otro hilo; si aparece, manda el QR y se corta la lectura del texto
-    const pQR = (typeof QRDNINuevo !== 'undefined')
-      ? QRDNINuevo.decodificar(foto, { modo: 'frame', anchos: [Math.min(foto.width, 3000), 2000] }).catch(() => null)
-        .then((rq) => { if (rq && !procesandoDNINuevo) { huboQR = true; return exitoDNINuevo(rq, foto).then(() => true); } return false; })
-      : Promise.resolve(false);
-    const pOCR = leerFrenteOCR({ foto }).catch(() => 'fallo');
-    const [, rOCR] = await Promise.all([pQR, pOCR]);
+    if (rOCR === 'fallo' && !procesandoDNINuevo && typeof QRDNINuevo !== 'undefined') {
+      if (escaneoEstado) escaneoEstado.textContent = '🔍 Buscando el QR en la foto…';
+      const rq = await QRDNINuevo.decodificar(foto, { modo: 'frame', anchos: [Math.min(foto.width, 3000), 2000] }).catch(() => null);
+      if (rq && !procesandoDNINuevo) { huboQR = true; await exitoDNINuevo(rq, foto); }
+    }
     procesandoFoto = false;
-    if (huboQR || rOCR === 'ok' || rOCR === 'reverso' || ultimoResultado !== previo) { actualizarBotonFoto(); return; }
+    if (huboQR || rOCR === 'ok' || rOCR === 'reverso' || rOCR === 'cancelado' || ultimoResultado !== previo) { actualizarBotonFoto(); return; }
     // no se pudo leer: se vuelve a la cámara para sacar otra
     reproducirSonidoError(); vibrarError();
     mostrarToast('No se pudo leer la foto. Probá de nuevo.', 'error');

@@ -1,5 +1,5 @@
 // Versión de la app: se muestra arriba a la derecha. Subir este número (y CACHE_NAME en sw.js) en cada cambio.
-const APP_VERSION = { numero: 41, fecha: '02/11/2026' };
+const APP_VERSION = { numero: 42, fecha: '02/11/2026' };
 (function () {
   function mostrar() {
     const h = document.querySelector('.app-header');
