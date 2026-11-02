@@ -183,6 +183,7 @@ const DomicilioOCR = (() => {
   // 3) una pasada más de párrafo. Corta apenas tiene todo. Devuelve los textos (+ .nombres) para votar.
   // Un solo motor de OCR: las lecturas se hacen de a una (en cola). Si dos lecturas se mezclaban, una le cambiaba
   // los parámetros a la otra a mitad de camino y las dos salían mal (frente automático + reverso al mismo tiempo).
+  const ANCHO_GENERAL = 1500;   // ancho de la pasada general del frente (menos píxeles = más rápido; las etiquetas son grandes)
   let cola = Promise.resolve(), generacionFrente = 0;
   function enCola(fn) { const p = cola.then(fn, fn); cola = p.catch(() => {}); return p; }
   // Corta la lectura del frente en curso (por ej. porque apareció el QR del reverso): devuelve lo que tenga hasta ahí
@@ -211,9 +212,12 @@ const DomicilioOCR = (() => {
     const gen = generacionFrente;
     const cancelado = () => gen !== generacionFrente;
     progresoCb = typeof onProgress === 'function' ? onProgress : null;
+    const tI = performance.now(), dt = () => Math.round(performance.now() - tI) + 'ms';
     const w = await initWorker();
+    log('⏱ motor listo ' + dt());
     const origen = await aElemento(fuente);
     const [gris, grisF] = await Promise.all([preprocesar(origen), preprocesar(origen, 'fondo')]);   // contraste estirado / luz normalizada
+    log('⏱ imagen preparada ' + dt() + ' (' + gris.width + 'x' + gris.height + ')');
     const textos = [];
     textos.nombres = { apellido: [], nombre: [] };
     const listo = () => typeof suficiente === 'function' && suficiente(textos);
@@ -239,7 +243,7 @@ const DomicilioOCR = (() => {
     etapa(0, 0.3);
     await setPsm('11');
     // (a menor resolución: las etiquetas son grandes y la pasada tarda la mitad; los datos se releen ampliados más abajo)
-    const kDesc = Math.min(1, 1500 / grisF.width);
+    const kDesc = Math.min(1, ANCHO_GENERAL / grisF.width);
     let entradaDesc = grisF;
     if (kDesc < 0.97) {
       entradaDesc = document.createElement('canvas');
@@ -248,6 +252,7 @@ const DomicilioOCR = (() => {
       dc.drawImage(grisF, 0, 0, entradaDesc.width, entradaDesc.height);
     }
     const r1 = await w.recognize(entradaDesc, {}, { text: true, blocks: true });
+    log('⏱ pasada general ' + dt() + ' (' + entradaDesc.width + 'x' + entradaDesc.height + ')');
     textos.push(r1.data.text || '');
     log('📄 OCR frente (disperso):\n' + r1.data.text);
     if (cancelado()) { await w.setParameters(PARAMS_TEXTO); textos.cancelado = true; return textos; }

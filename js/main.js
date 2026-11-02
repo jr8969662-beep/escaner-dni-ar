@@ -324,7 +324,7 @@
   function iniciarEscaneoContinuo() {
     if (stopScan) { stopScan(); stopScan = null; }
     // DNI nuevo: no tiene código de barras (el QR lo busca su propio lector)
-    if (esArgNuevo()) { if (escaneoEstado) escaneoEstado.textContent = '🔍 DNI nuevo: apuntá al frente o al reverso (QR)'; setEstadoMarco('buscando'); return; } if (escaneoEstado) escaneoEstado.textContent = '🔍 Buscando código…'; setEstadoMarco('buscando');
+    if (esArgNuevo()) { if (escaneoEstado) escaneoEstado.textContent = '🔍 DNI nuevo: el reverso (QR) se lee al instante · o apuntá al frente'; setEstadoMarco('buscando'); return; } if (escaneoEstado) escaneoEstado.textContent = '🔍 Buscando código…'; setEstadoMarco('buscando');
     stopScan = DNIScanner.escanearContinuo(video, canvas, (texto) => exitoEscaneo(texto), () => { if (escaneoEstado) escaneoEstado.textContent = '⏱ No se detectó. Acercá el DNI y mantenelo quieto dentro del marco.'; setEstadoMarco('error'); setStatus('Sin detección'); }, { intervaloMs: 300, timeoutMs: 3600000, anchoMax: 1920, usarROI: true, framesConfirmacion: 1, onBrillo: (brillo) => evaluarAutoFlash(brillo) });
   }
 
@@ -1464,14 +1464,14 @@
       // Sin código tras unos segundos con el DNI quieto: se prueba el frente del DNI nuevo por OCR
       // (DNI nuevo: enseguida. DNI viejo: el frente se lee por el código de barras; el OCR queda para cuando apuntan
       //  el reverso o el código no se lee, así que se espera un poco más)
-      const [msQuieto, msCam] = tipoDNI === 'nuevo' ? [300, 700] : [2200, 2800];
+      const [msQuieto, msCam] = tipoDNI === 'nuevo' ? [200, 500] : [2200, 2800];
       if (paisSeleccionado === 'arg' && detectorNuevoActivo && estableDesdeMs && ahora - estableDesdeMs > msQuieto &&
           ahora - camInicioMs > msCam && ahora - ultimoIntentoFrenteMs > 3500 && intentosFrenteAuto < 6 &&
           typeof FrenteDNI !== 'undefined' && typeof DomicilioOCR !== 'undefined' && DomicilioOCR.leerTexto) {
         intentosFrenteAuto++; ultimoIntentoFrenteMs = ahora;
         leerFrenteOCR({ auto: true });
       }
-    }, 800);
+    }, tipoDNI === 'nuevo' ? 400 : 800);   // (DNI nuevo: el frente se lee por texto, así que se decide antes si está quieto)
   }
 
   // Al salir de la app o cambiar de pestaña se libera la cámara (batería y rendimiento) y se retoma al volver
