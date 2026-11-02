@@ -178,6 +178,107 @@ const DomicilioOCR = (() => {
     return null;
   }
 
+  // Etiquetas del frente (Apellido, Nombre, Fecha de nacimiento…) a partir de las palabras con su posición
+  function armarEtiquetas(palabrasF) {
+    const etiquetas = [];
+    palabrasF.forEach((p) => {
+      const e = p.b && tipoEtiqueta(p.t);
+      if (!e) return;
+      // etiqueta en dos renglones ("Fecha de emisión/" + "Date of issue"): el dato está debajo del renglón de más abajo
+      const prev = etiquetas.find((x) => x.k === e.k);
+      if (!prev) etiquetas.push(Object.assign({ b: p.b }, e));
+      else if (p.b.y0 > prev.b.y1 && p.b.y0 - prev.b.y1 < 2 * (prev.b.y1 - prev.b.y0) && Math.abs((p.b.x0 - e.izq * (p.b.y1 - p.b.y0)) - (prev.b.x0 - prev.izq * (prev.b.y1 - prev.b.y0))) < 8 * (prev.b.y1 - prev.b.y0)) {
+        Object.assign(prev, { b: p.b }, e);
+      }
+    });
+    // sin la etiqueta "Apellido" (mal leída) pero con "Nombre": el apellido es el renglón justo encima de "Nombre"
+    const eNom = etiquetas.find((x) => x.k === 'nombre');
+    if (eNom && !etiquetas.some((x) => x.k === 'apellido')) {
+      const hN = Math.max(8, eNom.b.y1 - eNom.b.y0);
+      etiquetas.push({ k: 'apellido', izq: eNom.izq, ancho: eNom.ancho, b: eNom.b, yAbs: [eNom.b.y0 - 2.6 * hN, eNom.b.y0 - 0.15 * hN] });
+    }
+    // el renglón "M  ARGENTINA  B" llega hasta la etiqueta "Ejemplar" (si se leyó): así la letra del ejemplar no queda afuera
+    const eFila = etiquetas.find((x) => x.k === 'fila'), eEj = etiquetas.find((x) => x.k === 'ejemplar');
+    if (eFila) {
+      const hF = Math.max(8, eFila.b.y1 - eFila.b.y0);
+      eFila.x1Abs = eEj ? eEj.b.x1 + 1.2 * Math.max(8, eEj.b.y1 - eEj.b.y0) : eFila.b.x0 + 60 * hF;
+      // con el DNI apenas girado, el extremo derecho del renglón queda más arriba o más abajo: se toma el alto de las dos etiquetas
+      if (eEj) eFila.yAbs = [Math.min(eFila.b.y1, eEj.b.y1) + 0.15 * hF, Math.max(eFila.b.y1, eEj.b.y1) + 3.0 * hF];
+    }
+    return etiquetas;
+  }
+
+  // ===== Lectura NATIVA (solo en la APK): el reconocimiento de texto de Google (ML Kit) corre en el celular y lee una
+  // tarjeta en una fracción de segundo; Tesseract en el navegador tarda varios. Si no está (navegador / PWA) o falla, se usa Tesseract. =====
+  const pendientesNativo = {};
+  if (typeof window !== 'undefined') window.__ocrNativo = (id, json) => { const f = pendientesNativo[id]; if (f) { delete pendientesNativo[id]; f(json); } };
+  function ocrNativoDisponible() {
+    try { return typeof window !== 'undefined' && !!window.AndroidOCR && typeof window.AndroidOCR.leer === 'function' && !window.__sinOCRNativo; } catch (e) { return false; }
+  }
+  function ocrNativo(canvas, timeoutMs) {
+    return new Promise((resolve) => {
+      const id = 'o' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+      const t = setTimeout(() => { delete pendientesNativo[id]; resolve(null); }, timeoutMs || 8000);
+      pendientesNativo[id] = (json) => {
+        clearTimeout(t);
+        try { const o = JSON.parse(json); resolve(o && Array.isArray(o.words) ? o : null); } catch (e) { resolve(null); }
+      };
+      try { window.AndroidOCR.leer(id, canvas.toDataURL('image/jpeg', 0.9).split(',')[1]); }
+      catch (e) { clearTimeout(t); delete pendientesNativo[id]; resolve(null); }
+    });
+  }
+  // Texto de las palabras cuyo centro cae dentro del rectángulo, ordenado por renglones
+  function textoEnRect(palabras, x0, y0, x1, y1) {
+    const dentro = palabras.filter((p) => {
+      if (!p.b) return false;
+      const cx = (p.b.x0 + p.b.x1) / 2, cy = (p.b.y0 + p.b.y1) / 2;
+      return cx >= x0 && cx <= x1 && cy >= y0 && cy <= y1;
+    }).sort((a, b) => (a.b.y0 + a.b.y1) - (b.b.y0 + b.b.y1));
+    const lineas = [];
+    dentro.forEach((p) => {
+      const cy = (p.b.y0 + p.b.y1) / 2, h = p.b.y1 - p.b.y0;
+      const l = lineas.find((q) => Math.abs(q.cy - cy) < 0.6 * Math.max(h, q.h));
+      if (l) { l.ps.push(p); l.cy = (l.cy * (l.ps.length - 1) + cy) / l.ps.length; l.h = Math.max(l.h, h); }
+      else lineas.push({ cy, h, ps: [p] });
+    });
+    return lineas.map((l) => l.ps.sort((a, b) => a.b.x0 - b.b.x0).map((p) => p.t).join(' ')).join('\n');
+  }
+  async function leerFrenteNativo(fuente, onProgress) {
+    const origen = await aElemento(fuente);
+    const ow = origen.naturalWidth || origen.width, oh = origen.naturalHeight || origen.height;
+    const k = Math.min(1, 1800 / ow);   // 1800 px de ancho alcanzan para la letra de la tarjeta
+    const c = document.createElement('canvas'); c.width = Math.round(ow * k); c.height = Math.round(oh * k);
+    const cx = c.getContext('2d'); cx.imageSmoothingQuality = 'high'; cx.drawImage(origen, 0, 0, c.width, c.height);
+    if (onProgress) onProgress(0.15);
+    const t0 = performance.now();
+    const nat = await ocrNativo(c);
+    if (!nat || !nat.words.length) return null;
+    log('⚡ lectura nativa ' + Math.round(performance.now() - t0) + ' ms · ' + nat.words.length + ' palabras');
+    if (onProgress) onProgress(0.85);
+    const sx = nat.w ? c.width / nat.w : 1;
+    const palabras = nat.words.map((w) => ({ t: String(w.t), b: { x0: w.x0 * sx, y0: w.y0 * sx, x1: w.x1 * sx, y1: w.y1 * sx } }));
+    const textos = [];
+    textos.nombres = { apellido: [], nombre: [] };
+    textos.zonas = { nac: [], emi: [], ven: [], doc: [], tramite: [], ejemplar: [], fila: [], ejcombo: [] };
+    textos.nativo = true;
+    textos.push(nat.text || palabras.map((p) => p.t).join(' '));
+    if (/[I1][D0O]ARG|<<<</.test(String(textos[0]).toUpperCase().replace(/\s/g, ''))) { textos.esReverso = true; return textos; }
+    // zonas debajo de cada etiqueta (misma geometría que con Tesseract), pero con el texto que ya leyó el motor nativo
+    const etiquetas = armarEtiquetas(palabras);
+    etiquetas.forEach((e) => {
+      const h = Math.max(8, e.b.y1 - e.b.y0);
+      const x0 = Math.max(0, Math.round(e.b.x0 - e.izq * h)), x1 = Math.min(c.width, Math.round(e.x1Abs || (x0 + e.ancho * h)));
+      const y0 = Math.max(0, Math.round(e.yAbs ? e.yAbs[0] : e.b.y1 + (e.k === 'ejemplar' || e.k === 'fila' ? 0.15 : 0.1) * h)),
+        y1 = Math.min(c.height, Math.round(e.yAbs ? e.yAbs[1] : e.b.y1 + (e.alto || 2.4) * h));
+      if (x1 - x0 < 20 || y1 - y0 < 8) return;
+      const destino = textos.nombres[e.k] || textos.zonas[e.k];
+      const t = textoEnRect(palabras, x0, y0, x1, y1);
+      if (t) { destino.push(t); log('⚡ zona ' + e.k + ': ' + t.replace(/\n/g, ' | ')); }
+    });
+    if (onProgress) onProgress(1);
+    return textos;
+  }
+
   // FRENTE del DNI (viejo y nuevo). 1) texto disperso de la imagen completa + posición de las etiquetas;
   // 2) se relee AMPLIADA la línea que está debajo de "Apellido" y de "Nombre" (ahí falla más el OCR);
   // 3) una pasada más de párrafo. Corta apenas tiene todo. Devuelve los textos (+ .nombres) para votar.
@@ -212,6 +313,16 @@ const DomicilioOCR = (() => {
     const gen = generacionFrente;
     const cancelado = () => gen !== generacionFrente;
     progresoCb = typeof onProgress === 'function' ? onProgress : null;
+    // APK: lectura nativa (ML Kit). Si no está o falla, sigue con Tesseract
+    if (ocrNativoDisponible()) {
+      try {
+        const rn = await leerFrenteNativo(fuente, onProgress);
+        if (rn && cancelado()) { rn.cancelado = true; return rn; }
+        // si el motor nativo leyó todo (o es el reverso) se termina acá; si quedó algo sin leer, se sigue con Tesseract (más lento, pero revisa zona por zona)
+        if (rn && (rn.esReverso || typeof suficiente !== 'function' || suficiente(rn))) return rn;
+        if (rn) log('⚡ nativo incompleto: se sigue con Tesseract');
+      } catch (e) { log('nativo: ' + e); }
+    }
     const tI = performance.now(), dt = () => Math.round(performance.now() - tI) + 'ms';
     const w = await initWorker();
     log('⏱ motor listo ' + dt());
@@ -263,33 +374,9 @@ const DomicilioOCR = (() => {
 
     // 2) zonas debajo de las etiquetas: nombres, fechas, número y trámite, releídos ampliados
     textos.zonas = { nac: [], emi: [], ven: [], doc: [], tramite: [], ejemplar: [], fila: [] };
-    const etiquetas = [];
     const palabrasF = palabrasDe(r1.data).map((p) => (p.b && kDesc < 0.97)
       ? { t: p.t, b: { x0: p.b.x0 / kDesc, y0: p.b.y0 / kDesc, x1: p.b.x1 / kDesc, y1: p.b.y1 / kDesc } } : p);
-    palabrasF.forEach((p) => {
-      const e = p.b && tipoEtiqueta(p.t);
-      if (!e) return;
-      // etiqueta en dos renglones ("Fecha de emisión/" + "Date of issue"): el dato está debajo del renglón de más abajo
-      const prev = etiquetas.find((x) => x.k === e.k);
-      if (!prev) etiquetas.push(Object.assign({ b: p.b }, e));
-      else if (p.b.y0 > prev.b.y1 && p.b.y0 - prev.b.y1 < 2 * (prev.b.y1 - prev.b.y0) && Math.abs((p.b.x0 - e.izq * (p.b.y1 - p.b.y0)) - (prev.b.x0 - prev.izq * (prev.b.y1 - prev.b.y0))) < 8 * (prev.b.y1 - prev.b.y0)) {
-        Object.assign(prev, { b: p.b }, e);
-      }
-    });
-    // sin la etiqueta "Apellido" (mal leída) pero con "Nombre": el apellido es el renglón justo encima de "Nombre"
-    const eNom = etiquetas.find((x) => x.k === 'nombre');
-    if (eNom && !etiquetas.some((x) => x.k === 'apellido')) {
-      const hN = Math.max(8, eNom.b.y1 - eNom.b.y0);
-      etiquetas.push({ k: 'apellido', izq: eNom.izq, ancho: eNom.ancho, b: eNom.b, yAbs: [eNom.b.y0 - 2.6 * hN, eNom.b.y0 - 0.15 * hN] });
-    }
-    // el renglón "M  ARGENTINA  B" llega hasta la etiqueta "Ejemplar" (si se leyó): así la letra del ejemplar no queda afuera
-    const eFila = etiquetas.find((x) => x.k === 'fila'), eEj = etiquetas.find((x) => x.k === 'ejemplar');
-    if (eFila) {
-      const hF = Math.max(8, eFila.b.y1 - eFila.b.y0);
-      eFila.x1Abs = eEj ? eEj.b.x1 + 1.2 * Math.max(8, eEj.b.y1 - eEj.b.y0) : eFila.b.x0 + 60 * hF;
-      // con el DNI apenas girado, el extremo derecho del renglón queda más arriba o más abajo: se toma el alto de las dos etiquetas
-      if (eEj) eFila.yAbs = [Math.min(eFila.b.y1, eEj.b.y1) + 0.15 * hF, Math.max(eFila.b.y1, eEj.b.y1) + 3.0 * hF];
-    }
+    const etiquetas = armarEtiquetas(palabrasF);
     if (etiquetas.length) {
       await setPsm('7');
       // nombres y ejemplar (una letra suelta que la pasada general casi nunca ve) siempre se releen
@@ -1437,6 +1524,7 @@ const DomicilioOCR = (() => {
     leerReversoRapido: (...a) => enCola(() => leerReversoRapido(...a)),
     leerTexto: (...a) => enCola(() => leerTexto(...a)),
     leerFrente: (...a) => enCola(() => leerFrente(...a)),
+    nativoDisponible: ocrNativoDisponible,
     cancelarFrente,
     abortarFrente,
     precargarMRZ: () => { initWorkerMRZ(); },
