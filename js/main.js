@@ -36,6 +36,8 @@
   const btnUpload = document.getElementById('btn-upload');
   const btnRepetir = document.getElementById('btn-repetir');
   const btnFlash = document.getElementById('flash-btn');
+  const btnFoto = document.getElementById('btn-foto');
+  let procesandoFoto = false;
   const btnTema = document.getElementById('btn-tema');
   const fileInput = document.getElementById('file-input');
   const resultado = document.getElementById('resultado');
@@ -141,6 +143,7 @@
   }
 
   function animarCaptura() {
+    if (btnFoto) btnFoto.hidden = true;
     if (!scanFrame) return;
     scanFrame.classList.add('capturando');
     setTimeout(() => scanFrame.classList.remove('capturando'), 600);
@@ -308,7 +311,7 @@
       trackActual = stream.getVideoTracks()[0]; const caps = trackActual.getCapabilities ? trackActual.getCapabilities() : {};
       flashSoportado = !!caps.torch; if (flashSoportado && btnFlash) btnFlash.classList.add('activo');
       optimizarTrack(trackActual, caps);
-      setupCameraControls(); autoFlashActivo = false; iniciarEscaneoContinuo(); iniciarDeteccionDNINuevo(); iniciarMonitorCalidad();
+      setupCameraControls(); autoFlashActivo = false; iniciarEscaneoContinuo(); iniciarDeteccionDNINuevo(); iniciarMonitorCalidad(); actualizarBotonFoto();
     } catch (err) { mostrarErrorCamara('Error al mostrar el video.'); setStatus('Error', 'error'); }
   }
 
@@ -319,12 +322,13 @@
     if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
     trackActual = null; flashEncendido = false; autoFlashActivo = false; currentZoom = 1;
     if (btnFlash) btnFlash.classList.remove('encendido', 'activo'); if (zoomControl) zoomControl.hidden = true;
+    if (btnFoto) btnFoto.hidden = true;
   }
 
   function iniciarEscaneoContinuo() {
     if (stopScan) { stopScan(); stopScan = null; }
     // DNI nuevo: no tiene código de barras (el QR lo busca su propio lector)
-    if (esArgNuevo()) { if (escaneoEstado) escaneoEstado.textContent = '🔍 DNI nuevo: el reverso (QR) se lee al instante · o apuntá al frente'; setEstadoMarco('buscando'); return; } if (escaneoEstado) escaneoEstado.textContent = '🔍 Buscando código…'; setEstadoMarco('buscando');
+    if (esArgNuevo()) { if (escaneoEstado) escaneoEstado.textContent = '🔍 DNI nuevo: reverso (QR) al instante · frente: tocá «Sacar foto del DNI»'; setEstadoMarco('buscando'); return; } if (escaneoEstado) escaneoEstado.textContent = '🔍 Buscando código…'; setEstadoMarco('buscando');
     stopScan = DNIScanner.escanearContinuo(video, canvas, (texto) => exitoEscaneo(texto), () => { if (escaneoEstado) escaneoEstado.textContent = '⏱ No se detectó. Acercá el DNI y mantenelo quieto dentro del marco.'; setEstadoMarco('error'); setStatus('Sin detección'); }, { intervaloMs: 300, timeoutMs: 3600000, anchoMax: 1920, usarROI: true, framesConfirmacion: 1, onBrillo: (brillo) => evaluarAutoFlash(brillo) });
   }
 
@@ -599,7 +603,7 @@
       tipoDNI = b.dataset.tipo;
       try { localStorage.setItem(TIPO_KEY, tipoDNI); } catch (e) { /* nada */ }
       marcar();
-      mostrarToast(tipoDNI === 'nuevo' ? 'DNI nuevo: frente por lectura de texto, reverso por QR' : 'DNI viejo: frente por código de barras', 'success');
+      mostrarToast(tipoDNI === 'nuevo' ? 'DNI nuevo: frente con «Sacar foto», reverso por QR' : 'DNI viejo: frente por código de barras', 'success');
       // la cámara vuelve a arrancar buscando solo lo de este tipo
       if (stream) { detenerCamara(); iniciarCamara(); }
     }));
@@ -1465,7 +1469,7 @@
       // (DNI nuevo: enseguida. DNI viejo: el frente se lee por el código de barras; el OCR queda para cuando apuntan
       //  el reverso o el código no se lee, así que se espera un poco más)
       const [msQuieto, msCam] = tipoDNI === 'nuevo' ? [200, 500] : [2200, 2800];
-      if (paisSeleccionado === 'arg' && detectorNuevoActivo && estableDesdeMs && ahora - estableDesdeMs > msQuieto &&
+      if (paisSeleccionado === 'arg' && tipoDNI !== 'nuevo' && detectorNuevoActivo && estableDesdeMs && ahora - estableDesdeMs > msQuieto &&
           ahora - camInicioMs > msCam && ahora - ultimoIntentoFrenteMs > 3500 && intentosFrenteAuto < 6 &&
           typeof FrenteDNI !== 'undefined' && typeof DomicilioOCR !== 'undefined' && DomicilioOCR.leerTexto) {
         intentosFrenteAuto++; ultimoIntentoFrenteMs = ahora;
@@ -1532,14 +1536,15 @@
 
   async function leerFrenteOCR(opts) {
     const auto = !!(opts && opts.auto);
-    if (ocrFrenteEnCurso) return;
+    if (ocrFrenteEnCurso) return 'ocupado';
     ocrFrenteEnCurso = true;
-    try { await leerFrenteOCRInterno(auto); } finally { ocrFrenteEnCurso = false; }
+    try { return await leerFrenteOCRInterno(auto, opts && opts.foto); } finally { ocrFrenteEnCurso = false; }
   }
 
-  async function leerFrenteOCRInterno(auto) {
-    if (typeof FrenteDNI === 'undefined' || typeof DomicilioOCR === 'undefined') { mostrarToast('Falta cargar el lector del frente', 'error'); return; }
-    if (!stream || !video || !video.videoWidth) { if (!auto) mostrarToast('Primero iniciá la cámara y apuntá al frente del DNI', 'error'); return; }
+  // Devuelve 'ok' (frente leído), 'reverso' (era el reverso y se leyó), 'cancelado' (mandó el QR) o 'fallo'
+  async function leerFrenteOCRInterno(auto, fotoDada) {
+    if (typeof FrenteDNI === 'undefined' || typeof DomicilioOCR === 'undefined') { mostrarToast('Falta cargar el lector del frente', 'error'); return 'fallo'; }
+    if (!stream || !video || !video.videoWidth) { if (!auto) mostrarToast('Primero iniciá la cámara y apuntá al frente del DNI', 'error'); return 'fallo'; }
     // en automático el lector de códigos (PDF417 / QR) sigue funcionando mientras se lee el frente
     if (!auto) { detenerDeteccionDNINuevo(); if (stopScan) { stopScan(); stopScan = null; } }
     const resultadoPrevio = ultimoResultado;
@@ -1548,9 +1553,9 @@
     if (escaneoEstado) escaneoEstado.textContent = auto ? '🔍 DNI detectado: leyendo el frente… mantené quieto' : '🔍 Leyendo el frente del DNI… mantené quieto';
     let datosF = null, canvasF = null, textosCrudos = [], cancelada = false;
     try {
-      const intentos = auto ? 1 : 2;   // en automático, una sola vuelta: si falla se reintenta solo unos segundos después
+      const intentos = (auto || fotoDada) ? 1 : 2;   // en automático, una sola vuelta: si falla se reintenta solo unos segundos después
       for (let intento = 1; intento <= intentos && !datosF; intento++) {
-        canvasF = await capturarFrenteRecortado(2, 80);
+        canvasF = fotoDada || await capturarFrenteRecortado(2, 80);
         const textos = await DomicilioOCR.leerFrente(canvasF, (p) => {
           if (escaneoEstado) escaneoEstado.textContent = `🔍 Leyendo el frente… ${Math.round(p * 100)}%`;
         }, (t) => FrenteDNI.completo(FrenteDNI.parsearVarios(t)));
@@ -1561,18 +1566,24 @@
       }
     } catch (e) { console.warn('OCR frente:', e); }
     if (btnF) btnF.disabled = false;
-    if (cancelada) return;   // se leyó un código mientras tanto: manda el código
+    if (cancelada || procesandoDNINuevo) return 'cancelado';   // se leyó un código mientras tanto: manda el código
     // ¿Es el reverso? (tiene las líneas con <<<): se pasa directo a leer el reverso en alta resolución
     if ((textosCrudos.esReverso || !datosF) && stream && ultimoResultado === resultadoPrevio && /[I1][D0O]ARG|<<<</.test(textosCrudos.join('\n').toUpperCase().replace(/\s/g, ''))) {
       if (escaneoEstado) escaneoEstado.textContent = '🔍 Es el reverso: leyendo QR, domicilio y CUIL…';
+      if (fotoDada) {   // foto sacada con el botón: se lee y, si no sale, se avisa acá mismo
+        let fallo = false;
+        await leerReversoDirecto(canvasF, { mrzTextos: textosCrudos.slice(0, 2), siFalla: () => { fallo = true; } });
+        return fallo ? 'fallo' : 'reverso';
+      }
       if (canvasF) leerReversoDirecto(canvasF, { mrzTextos: textosCrudos.slice(0, 2) }); else abrirReversoDNINuevo();
-      return;
+      return 'reverso';
     }
+    if (!datosF && fotoDada) return 'fallo';
     if (!datosF) {
       setEstadoMarco('buscando'); setStatus('Cámara activa', 'active');
       if (escaneoEstado) escaneoEstado.textContent = auto ? '🔍 Buscando código…' : '⚠ No se pudo leer el frente. Más luz, sin reflejos, todo el DNI dentro del marco.';
       if (!auto) { mostrarToast('No se pudo leer el frente. Probá de nuevo.', 'error'); iniciarEscaneoContinuo(); iniciarDeteccionDNINuevo(); }
-      return;
+      return 'fallo';
     }
     if (!stream || ultimoResultado !== resultadoPrevio) {
       const d = ultimoResultado;
@@ -1581,7 +1592,7 @@
         ['apellido', 'nombre', 'fechaNacimiento', 'fechaEmision', 'fechaVencimiento', 'nacionalidad', 'ejemplar', 'tramite'].forEach((k) => { if (!d[k] && datosF[k]) { d[k] = datosF[k]; n++; } });
         if (n) { d.nombreCompleto = ((d.apellido || '') + ' ' + (d.nombre || '')).trim(); render(d); }
       }
-      return;
+      return 'cancelado';
     }
     if (auto) { detenerDeteccionDNINuevo(); if (stopScan) { stopScan(); stopScan = null; } }
     setEstadoMarco('ok'); animarCaptura();
@@ -1605,6 +1616,7 @@
     setStatus('Frente leído', 'active'); reproducirSonidoExito(); vibrarExito();
     if (btnRepetir) btnRepetir.hidden = false;
     precargarMotorMRZ();
+    return 'ok';
   }
   // motor de las líneas <<< del reverso: se carga cuando el frente ya está leído (mientras se da vuelta el DNI),
   // no antes: cargarlo durante la lectura del frente la hacía más lenta
@@ -1648,6 +1660,159 @@
     } catch (e) { console.warn('Completar con el frente:', e); }
     finally { ocrFrenteEnCurso = false; if (escaneoEstado) escaneoEstado.textContent = previo.indexOf('Completando') >= 0 ? '✅ Escaneo OK' : previo; }
   }
+
+
+  // ===== DNI nuevo: FOTO en máxima resolución =====
+  // Sacar la foto con el sensor completo (enfoque propio de la cámara) da una imagen mucho más nítida que un cuadro del video,
+  // sobre todo si la mano tiembla. De esa misma foto se lee el QR (reverso) o el texto (frente).
+  function actualizarBotonFoto() {
+    if (!btnFoto) return;
+    btnFoto.hidden = !(esArgNuevo() && stream && (!img || img.hidden));
+    btnFoto.classList.toggle('ocupado', procesandoFoto);
+  }
+
+  const dormir = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  // Región del marco (con margen) en coordenadas del video, y dónde queda el marco dentro de ella
+  function regionMarcoVideo(margen) {
+    if (!scanFrame) return null;
+    const b = scanFrame.getBoundingClientRect();
+    if (b.width < 40 || b.height < 40) return null;
+    const m = { left: b.left, top: b.top, width: b.width, height: b.height };
+    const rc = rectEnVideo(video, m, margen);
+    if (!rc || rc.w < 200 || rc.h < 120) return null;
+    return { rc, rel: marcoRelativo(video, m, rc) };
+  }
+
+  // Foto del sensor (ImageCapture.takePhoto), recortada al marco. null si el navegador no la permite.
+  async function fotoDelSensor(margen) {
+    if (!trackActual || typeof ImageCapture === 'undefined' || typeof createImageBitmap !== 'function') return null;
+    const vw = video.videoWidth, vh = video.videoHeight;
+    const reg = regionMarcoVideo(margen);
+    if (!vw || !vh || !reg) return null;
+    let bmp = null;
+    try {
+      const ic = new ImageCapture(trackActual);
+      const opts = {};
+      try {
+        const pc = await ic.getPhotoCapabilities();
+        if (pc.imageWidth && pc.imageHeight && pc.imageWidth.max && pc.imageHeight.max) {
+          // lo más grande posible, pero sin pasar de ~12 MP (más pesaría de más en el celular)
+          const k = Math.min(1, 4032 / pc.imageWidth.max);
+          opts.imageWidth = Math.round(pc.imageWidth.max * k); opts.imageHeight = Math.round(pc.imageHeight.max * k);
+        }
+        if (pc.fillLightMode && pc.fillLightMode.indexOf('off') >= 0) opts.fillLightMode = 'off';
+      } catch (e) { /* sin capacidades: se usa lo de fábrica */ }
+      const blob = await Promise.race([ic.takePhoto(opts), dormir(7000).then(() => { throw new Error('takePhoto tardó'); })]);
+      bmp = await createImageBitmap(blob);
+      const pw = bmp.width, ph = bmp.height;
+      if ((pw > ph) !== (vw > vh)) { bmp.close(); return null; }   // orientación distinta: no se puede ubicar el marco
+      // la foto puede tener otra proporción que el video: el video es el recorte centrado de la foto
+      let cw = pw, ch = ph;
+      if (pw / ph > vw / vh) cw = ph * vw / vh; else ch = pw * vh / vw;
+      const k = cw / vw, ox = (pw - cw) / 2, oy = (ph - ch) / 2;
+      const r = reg.rc;
+      const sx = Math.max(0, ox + r.x * k), sy = Math.max(0, oy + r.y * k);
+      const sw = Math.min(pw - sx, r.w * k), sh = Math.min(ph - sy, r.h * k);
+      const esc = Math.min(1, 2800 / sw);   // la tarjeta no necesita más de ~2800 px de ancho
+      const c = document.createElement('canvas');
+      c.width = Math.round(sw * esc); c.height = Math.round(sh * esc);
+      const cx = c.getContext('2d'); cx.imageSmoothingQuality = 'high';
+      cx.drawImage(bmp, sx, sy, sw, sh, 0, 0, c.width, c.height);
+      bmp.close();
+      c.marcoRel = reg.rel; c.origen = 'sensor ' + pw + 'x' + ph;
+      return c;
+    } catch (e) { try { if (bmp) bmp.close(); } catch (e2) { /* nada */ } log(e); return null; }
+  }
+
+  // Sin ImageCapture: se pide la mayor resolución al video, se espera el enfoque y se queda el cuadro más nítido
+  async function fotoDelVideo(n) {
+    try {
+      const w0 = video.videoWidth;
+      if (trackActual && trackActual.applyConstraints && w0 && w0 < 3000) {
+        await trackActual.applyConstraints({ width: { ideal: 3840 }, height: { ideal: 2160 } });
+        await dormir(700);
+      }
+    } catch (e) { /* queda la resolución actual */ }
+    const c = await capturarFrenteRecortado(n || 4, 110);
+    if (c) c.origen = 'video ' + video.videoWidth + 'x' + video.videoHeight;
+    return c;
+  }
+
+  const nitidezNorm = (c) => { const h = Math.max(2, Math.round(c.height * 480 / c.width)); return nitidez(c) / (480 * h); };
+
+  // Saca la mejor foto posible: si la primera sale menos nítida que el video (movida / sin enfoque), saca otra y se queda con la mejor
+  async function sacarFotoNitida() {
+    const ref = await capturarFrenteRecortado(1, 0);   // cuadro del video como referencia de nitidez
+    const sRef = ref ? nitidezNorm(ref) : 0;
+    let mejor = null, sMejor = -1;
+    for (let i = 0; i < 3; i++) {
+      let f = await fotoDelSensor(0.22);
+      if (!f && i === 0) f = await fotoDelVideo(4);
+      if (!f) break;
+      const s = nitidezNorm(f);
+      log('📸 foto ' + (i + 1) + ': ' + f.origen + ' ' + f.width + 'x' + f.height + ' nitidez ' + s.toFixed(1) + ' (video ' + sRef.toFixed(1) + ')');
+      if (s > sMejor) { sMejor = s; mejor = f; }
+      if (!mejor.origen.startsWith('sensor') || s >= sRef * 0.85) break;   // alcanza: tan nítida como el video o más
+      if (escaneoEstado) escaneoEstado.textContent = '📸 Salió algo movida… sacando otra, mantené quieto';
+      await dormir(250);
+    }
+    if (!mejor) mejor = ref;
+    if (mejor) mejor.nitidez = sMejor;
+    return mejor;
+  }
+
+  function reanudarTrasFoto() {
+    if (img) { img.hidden = true; img.src = ''; }
+    if (video) video.hidden = false;
+    if (stream) {
+      if (scanFrame) { scanFrame.classList.add('activo'); setEstadoMarco('buscando'); }
+      if (cameraHint) cameraHint.style.opacity = '1';
+      iniciarEscaneoContinuo(); iniciarDeteccionDNINuevo(); actualizarBotonFoto();
+    } else {
+      detenerCamara(); iniciarCamara();
+    }
+  }
+
+  async function sacarFoto() {
+    if (procesandoFoto || procesandoDNINuevo || !stream || !video || !video.videoWidth) return;
+    procesandoFoto = true; actualizarBotonFoto();
+    detenerDeteccionDNINuevo(); if (stopScan) { stopScan(); stopScan = null; }
+    if (typeof DomicilioOCR !== 'undefined' && DomicilioOCR.precargar) DomicilioOCR.precargar().catch(() => {});
+    if (escaneoEstado) escaneoEstado.textContent = '📸 Sacando foto… mantené quieto';
+    setEstadoMarco('detectando'); animarCapturaFlash();
+    let foto = null;
+    try { foto = await sacarFotoNitida(); } catch (e) { console.warn('Foto:', e); }
+    if (!foto || !stream) { procesandoFoto = false; if (stream) reanudarTrasFoto(); return; }
+    // la foto queda en pantalla mientras se lee
+    try { ultimaFotoDataUrl = foto.toDataURL('image/jpeg', 0.92); if (img) { img.src = ultimaFotoDataUrl; img.hidden = false; } if (video) video.hidden = true; } catch (e) { /* nada */ }
+    if (btnFoto) btnFoto.hidden = true;
+    if (escaneoEstado) escaneoEstado.textContent = '🔍 Leyendo la foto…';
+    const previo = ultimoResultado;
+    let huboQR = false;
+    // QR (reverso) y texto (frente) a la vez: el QR corre en otro hilo; si aparece, manda el QR y se corta la lectura del texto
+    const pQR = (typeof QRDNINuevo !== 'undefined')
+      ? QRDNINuevo.decodificar(foto, { modo: 'frame', anchos: [Math.min(foto.width, 3000), 2000] }).catch(() => null)
+        .then((rq) => { if (rq && !procesandoDNINuevo) { huboQR = true; return exitoDNINuevo(rq, foto).then(() => true); } return false; })
+      : Promise.resolve(false);
+    const pOCR = leerFrenteOCR({ foto }).catch(() => 'fallo');
+    const [, rOCR] = await Promise.all([pQR, pOCR]);
+    procesandoFoto = false;
+    if (huboQR || rOCR === 'ok' || rOCR === 'reverso' || ultimoResultado !== previo) { actualizarBotonFoto(); return; }
+    // no se pudo leer: se vuelve a la cámara para sacar otra
+    reproducirSonidoError(); vibrarError();
+    mostrarToast('No se pudo leer la foto. Probá de nuevo.', 'error');
+    reanudarTrasFoto();
+    if (escaneoEstado) escaneoEstado.textContent = '⚠ No se pudo leer la foto. Más luz, sin reflejos, el DNI quieto y entero dentro del marco; tocá «Sacar foto del DNI» de nuevo.';
+  }
+
+  function animarCapturaFlash() {
+    const vp = document.getElementById('captura-dni');
+    if (!vp) return;
+    vp.classList.add('flash-foto'); setTimeout(() => vp.classList.remove('flash-foto'), 220);
+    try { if (navigator.vibrate) navigator.vibrate(30); } catch (e) { /* nada */ }
+  }
+  if (btnFoto) btnFoto.addEventListener('click', sacarFoto);
 
   function inyectarBotonFrente() {
     const cont = document.querySelector('.camera-actions');

@@ -343,3 +343,11 @@ html, body { overflow-x: hidden; }
   .status-pill #status-text { max-width: 84px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+
+/* Botón de foto (DNI nuevo): saca una foto en máxima resolución, mucho más nítida que un cuadro del video */
+.camera-actions .btn-foto { flex: 1 1 100%; min-height: 54px; font-size: 16px; gap: 10px; }
+.camera-actions .btn-foto[hidden] { display: none; }
+.camera-actions .btn-foto .foto-icono { font-size: 22px; line-height: 1; }
+.btn-foto.ocupado { opacity: .5; pointer-events: none; }
+.camera-viewport.flash-foto::after { content: ""; position: absolute; inset: 0; background: #fff; opacity: .55; z-index: 7; pointer-events: none; animation: flashFoto .22s ease-out forwards; }
+@keyframes flashFoto { to { opacity: 0; } }
