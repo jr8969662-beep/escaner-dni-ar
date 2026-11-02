@@ -279,8 +279,11 @@
   async function iniciarCamara() {
     if (stream) return;
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { mostrarErrorCamara('Este navegador no permite acceder a la cámara.'); setStatus('Sin cámara', 'error'); return; }
+    // DNI viejo: el código de barras se lee bien con 1920x1080 (menos carga para el celular: la imagen se mueve más fluida).
+    // DNI nuevo: el QR es muy denso y conviene la mayor resolución.
+    const anchoCam = esArgViejo() ? 1920 : 2560, altoCam = esArgViejo() ? 1080 : 1440;
     const configs = [
-      { video: { facingMode: { ideal: 'environment' }, width: { ideal: 2560 }, height: { ideal: 1440 }, frameRate: { ideal: 30, max: 30 }, focusMode: 'continuous', exposureMode: 'continuous' }, audio: false },
+      { video: { facingMode: { ideal: 'environment' }, width: { ideal: anchoCam }, height: { ideal: altoCam }, frameRate: { ideal: 30, max: 30 }, focusMode: 'continuous', exposureMode: 'continuous' }, audio: false },
       { video: { facingMode: 'environment' }, audio: false },
       { video: true, audio: false }
     ];
@@ -1196,14 +1199,26 @@
           vueltasQR++;
           const frame = { width: video.videoWidth, height: video.videoHeight };   // se copia solo lo necesario (más liviano)
           // 1) imagen recortada al marco con forma de DNI: se amplía solo la zona del QR (rápido y lee el QR denso)
+          // (camino liviano: se lee directo del video en el hilo aparte; la imagen del recorte solo se arma si apareció el QR.
+          //  Si el navegador no lo permite, se usa el camino de siempre)
           let base = null, r = null, rcUsado = null;
           if (scanFrame && typeof rectEnVideo === 'function') {
             const b = scanFrame.getBoundingClientRect();
             const rc = b.width > 40 ? rectEnVideo(video, { left: b.left, top: b.top, width: b.width, height: b.height }, 0.15) : null;
-            if (rc && rc.w > 200 && rc.h > 120) { base = recortarRect(video, rc); rcUsado = rc; r = await QRDNINuevo.decodificar(base, { modo: 'vivo' }); }
+            if (rc && rc.w > 200 && rc.h > 120) {
+              rcUsado = rc;
+              r = await QRDNINuevo.decodificarVideo(video, rc, 'vivo');
+              if (r === undefined) { base = recortarRect(video, rc); r = await QRDNINuevo.decodificar(base, { modo: 'vivo' }); }
+              else if (r) base = recortarRect(video, rc);
+            }
           }
           // 2) de vez en cuando, el cuadro entero (por si el DNI no está dentro del marco)
-          if (!r && vueltasQR % 4 === 0) { base = capturarFrame(video); rcUsado = null; r = await QRDNINuevo.decodificar(base, { modo: 'frame' }); }
+          if (!r && vueltasQR % 4 === 0) {
+            rcUsado = null;
+            r = await QRDNINuevo.decodificarVideo(video, null, 'frame');
+            if (r === undefined) { base = capturarFrame(video); r = await QRDNINuevo.decodificar(base, { modo: 'frame' }); }
+            else if (r) base = capturarFrame(video);
+          }
           if (r && detectorNuevoActivo) { detectorNuevoActivo = false; exitoDNINuevo(r, base, { rc: rcUsado, anchoVideo: frame.width }); return; }
         } catch (e) { log(e); }
       }
@@ -1456,7 +1471,7 @@
         intentosFrenteAuto++; ultimoIntentoFrenteMs = ahora;
         leerFrenteOCR({ auto: true });
       }
-    }, 500);
+    }, 800);
   }
 
   // Al salir de la app o cambiar de pestaña se libera la cámara (batería y rendimiento) y se retoma al volver

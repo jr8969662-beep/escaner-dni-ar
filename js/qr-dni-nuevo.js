@@ -121,6 +121,47 @@ const QRDNINuevo = (() => {
     return null;
   }
 
+  // Cámara en vivo, camino liviano: lee directo del <video> (el navegador recorta/achica y el hilo aparte decodifica), sin dibujar
+  // ni copiar píxeles en la hoja principal. rc = región del video (píxeles) que equivale al canvas "base"; null = cuadro entero.
+  // Devuelve igual que decodificar() (ubicación relativa a esa región), null si no hay QR, o undefined si este camino no se puede usar.
+  async function decodificarVideo(video, rc, modo) {
+    if (!hiloOk() || !lectorHilo.bitmapOk || !lectorHilo.bitmapOk() || !video || !video.videoWidth) return undefined;
+    llamadasFrame++;
+    const R = rc || { x: 0, y: 0, w: video.videoWidth, h: video.videoHeight };
+    if (detectorNativo) {
+      try {
+        const lista = await detectorNativo.detect(video);
+        for (const b of lista) {
+          const datos = parsear(b.rawValue || '');
+          if (!datos) continue;
+          const p = b.cornerPoints, q = (c) => ({ x: c.x - R.x, y: c.y - R.y });
+          return { texto: b.rawValue, datos, ubicacion: p && p.length === 4 ? { tl: q(p[0]), tr: q(p[1]), br: q(p[2]), bl: q(p[3]) } : null };
+        }
+      } catch (e) { detectorNativo = null; }
+    }
+    if (!lectorHilo.libre()) return null;
+    const frame = modo === 'frame', vuelta = llamadasFrame % 4;
+    const lista = frame ? INTENTOS_FRAME : [vuelta === 1 ? INTENTOS[0] : INTENTOS[1]];
+    const anchos = frame ? [llamadasFrame % 2 ? 2880 : 1920] : [vuelta === 3 ? 1400 : 0];
+    const cw = Math.round(R.w), ch = Math.round(R.h);
+    for (const it of lista) {
+      const sx = Math.round(cw * it.x), sy = Math.round(ch * it.y), sw = Math.round(cw * it.w), sh = Math.round(ch * it.h);
+      for (const ancho of anchos) {
+        const esc = ancho ? Math.min(ancho, 2600) / sw : 1;
+        const w = Math.round(sw * esc), h = Math.round(sh * esc);
+        if (w * h > 7e6) continue;
+        const r = await lectorHilo.leerRegion(video, { sx: R.x + sx, sy: R.y + sy, sw, sh, w, h }, ['qr'], 8000, [1, 2].includes(llamadasFrame % 4));
+        if (!hiloOk()) return undefined;
+        const datos = r && parsear(r.texto);
+        if (datos) {
+          const u = esquinasDe(r), mp = (q) => ({ x: sx + q.x / esc, y: sy + q.y / esc });
+          return { texto: r.texto, datos, ubicacion: u ? { tl: mp(u.tl), tr: mp(u.tr), br: mp(u.br), bl: mp(u.bl) } : null };
+        }
+      }
+    }
+    return null;
+  }
+
   // opciones.modo === 'frame' -> busca en todo el cuadro (cámara en vivo). Por defecto asume tarjeta encuadrada.
   // opciones.anchos -> anchos de trabajo en px (para fotos subidas conviene el tamaño original).
   async function decodificar(canvas, opciones = {}) {
@@ -210,5 +251,5 @@ const QRDNINuevo = (() => {
     return r.w > 100 && r.h > 60 ? r : null;
   }
 
-  return { decodificar, parsear, rectTarjeta };
+  return { decodificar, decodificarVideo, parsear, rectTarjeta };
 })();

@@ -61,6 +61,44 @@ const DNIScanner = (() => {
     return muestras > 0 ? suma / muestras : 0;
   }
 
+  // Brillo del cuadro actual con una miniatura (antes se leían los píxeles del cuadro entero: ~8 MB cada vez)
+  let cvBrillo = null;
+  function medirBrilloVideo(video) {
+    if (!cvBrillo) { cvBrillo = document.createElement('canvas'); cvBrillo.width = 48; cvBrillo.height = 27; }
+    const cx = cvBrillo.getContext('2d', { willReadFrequently: true });
+    cx.drawImage(video, 0, 0, 48, 27);
+    const d = cx.getImageData(0, 0, 48, 27).data;
+    let suma = 0; for (let i = 0; i < d.length; i += 4) suma += 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+    return suma / (d.length / 4);
+  }
+
+  // Cámara en vivo, camino liviano: el navegador recorta y achica el cuadro (ImageBitmap) y el hilo aparte lo lee.
+  // La hoja principal no dibuja ni copia píxeles: la imagen de la cámara se mueve fluida. Si el lector está ocupado, no se hace nada.
+  async function escanearVideoEnHilo(video, anchoMax) {
+    if (!lectorHilo.libre()) return null;
+    const vw = video.videoWidth, vh = video.videoHeight;
+    if (barcodeDetector) {
+      try {
+        const codigos = await barcodeDetector.detect(video);
+        for (const cod of codigos || []) if (!esURLInvalida(cod.rawValue)) return cod.rawValue;
+      } catch (e) {}
+    }
+    const escala = Math.min(1, anchoMax / vw);
+    // zona del código (94 % x 90 % centrada); en cada cuadro una variante distinta: todo, mitad de abajo, abajo ampliado, todo ampliado
+    const rx = Math.round(vw * 0.03), ry = Math.round(vh * 0.05), rw = Math.round(vw * 0.94), rh = Math.round(vh * 0.9);
+    const variante = vueltaVariante++ % 4;
+    let sy = ry, sh = rh, esc = 1;
+    if (variante) {
+      esc = variante === 1 ? 1 : variante === 2 ? 1.5 : 1.3;
+      if (variante !== 3) { const off = Math.round(rh * 0.45); sy = ry + off; sh = rh - off; }
+    }
+    const k = escala * esc;
+    const r = await lectorHilo.leerRegion(video, { sx: rx, sy, sw: rw, sh, w: rw * k, h: sh * k }, ['pdf417', 'qr']);
+    if (r && r.texto && !esURLInvalida(r.texto)) return r.texto;
+    return null;
+  }
+  const usaBitmap = () => !!(lectorHilo && lectorHilo.bitmapOk && lectorHilo.bitmapOk());
+
   // enVivo: si el lector del hilo aparte está ocupado se saltea el cuadro (no se acumulan pedidos ni se traba nada)
   async function escanearFrame(canvas, usarROI = true, enVivo = false) {
     const canvasEscaneo = usarROI ? extraerROI(canvas) : canvas;
@@ -127,7 +165,21 @@ const DNIScanner = (() => {
     async function loop() {
       if (!activo) return;
       try {
-        if (video.srcObject && video.readyState >= 2 && video.videoWidth) {
+        if (video.srcObject && video.readyState >= 2 && video.videoWidth && usaBitmap()) {
+          if (intentos % 3 === 0 && onBrillo) { try { onBrillo(medirBrilloVideo(video)); } catch (e) {} }
+          const texto = await escanearVideoEnHilo(video, anchoMax);
+          if (texto && activo) {
+            if (texto === ultimoTextoDetectado) framesConfirmados++; else { ultimoTextoDetectado = texto; framesConfirmados = 1; }
+            if (framesConfirmados >= framesConfirmacion) {
+              // el resto de la app usa este canvas como foto del documento: se dibuja el cuadro (una sola vez, al detectar)
+              const esc1 = Math.min(1, anchoMax / video.videoWidth);
+              canvas.width = Math.round(video.videoWidth * esc1); canvas.height = Math.round(video.videoHeight * esc1);
+              canvas.getContext('2d', { willReadFrequently: true }).drawImage(video, 0, 0, canvas.width, canvas.height);
+              activo = false; clearTimeout(timer); onDetected(texto); return;
+            }
+          } else { ultimoTextoDetectado = null; framesConfirmados = 0; }
+          intentos++;
+        } else if (video.srcObject && video.readyState >= 2 && video.videoWidth) {
           const escala = Math.min(1, anchoMax / video.videoWidth);
           canvas.width = Math.round(video.videoWidth * escala);
           canvas.height = Math.round(video.videoHeight * escala);

@@ -88,11 +88,23 @@ function leerQR(rgba, lum, w, h) {
   return null;
 }
 
+// ¿Se pueden recibir cuadros como ImageBitmap? (así la hoja principal no copia ni lee píxeles: se hace acá)
+const soportaBitmap = typeof OffscreenCanvas !== 'undefined' && typeof createImageBitmap === 'function';
+
 self.onmessage = (ev) => {
-  const { id, w, h, buf, tipos, mejorar } = ev.data || {};
-  if (ev.data && ev.data.ping) { self.postMessage({ id, pong: true, listo, errorCarga }); return; }
+  let { id, w, h, buf, tipos, mejorar } = ev.data || {};
+  if (ev.data && ev.data.ping) { self.postMessage({ id, pong: true, listo, errorCarga, bitmap: soportaBitmap }); return; }
   let res = null;
   try {
+    // cuadro llegado como ImageBitmap (recortado y achicado por el navegador): se pasa a píxeles en este hilo
+    if (ev.data && ev.data.bmp) {
+      const bmp = ev.data.bmp;
+      w = bmp.width; h = bmp.height;
+      const oc = new OffscreenCanvas(w, h), cx = oc.getContext('2d', { willReadFrequently: true });
+      cx.drawImage(bmp, 0, 0);
+      try { bmp.close(); } catch (e) { /* nada */ }
+      buf = cx.getImageData(0, 0, w, h).data.buffer;
+    }
     const rgba = new Uint8ClampedArray(buf);
     const lum = luminancia(rgba, w * h);
     for (const t of tipos || []) {
