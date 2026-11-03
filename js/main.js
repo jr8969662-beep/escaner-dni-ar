@@ -444,7 +444,10 @@
   // v48: miniaturas del frente y del reverso en la ficha (se tocan para verlas ampliadas, con zoom)
   function actualizarFotosFicha() {
     if (typeof VisorFoto === 'undefined') return;
-    try { VisorFoto.actualizarFicha({ frente: ultimaFotoDataUrl, reverso: ultimaFotoReversoUrl }); } catch (e) { /* nada */ }
+    try {
+      if (VisorFoto.setPrefijo) VisorFoto.setPrefijo('DNI_' + ((ultimoResultado && (ultimoResultado.dni || ultimoResultado.numero)) || 'documento'));
+      VisorFoto.actualizarFicha({ frente: ultimaFotoDataUrl, reverso: ultimaFotoReversoUrl });
+    } catch (e) { /* nada */ }
   }
 
   function render(d) {
@@ -485,10 +488,18 @@
     if (!ultimoResultado) return;
 
     const arr = leerHistorial();
-    arr.unshift({ id: Date.now(), fecha: new Date().toISOString(), datos: ultimoResultado });
+    const id = Date.now();
+    const conFotos = !!(ultimaFotoDataUrl || ultimaFotoReversoUrl);
+    arr.unshift({ id, fecha: new Date().toISOString(), datos: ultimoResultado, conFotos });
     if (arr.length > MAX_HISTORIAL) arr.length = MAX_HISTORIAL;
     escribirHistorial(arr);
     actualizarContadorHistorial();
+    // v49: las fotos (frente y reverso) se guardan en el celular junto al registro
+    if (conFotos && typeof HistorialFotos !== 'undefined') {
+      HistorialFotos.guardar(id, { frente: ultimaFotoDataUrl, reverso: ultimaFotoReversoUrl })
+        .then((ok) => { mostrarToast(ok ? '✓ Registrado con las fotos' : 'Registrado (las fotos no se pudieron guardar)', ok ? 'success' : 'error'); return HistorialFotos.dejarSolo(leerHistorial().map((x) => x.id)); })
+        .catch(() => mostrarToast('Registrado (las fotos no se pudieron guardar)', 'error'));
+    }
 
     if (supabaseClient && ultimaFotoDataUrl) {
       mostrarToast('Guardando en la nube...', 'success');
@@ -532,35 +543,82 @@
     }
   }
 
-  function renderHistorial() {
+  // v49: historial con la foto al lado de los datos de la persona (las fotos se guardan en el celular, en IndexedDB)
+  async function renderHistorial() {
     if (!historialLista) return;
     const arr = leerHistorial();
     if (arr.length === 0) { historialLista.innerHTML = '<p class="empty-state">No hay escaneos guardados</p>'; return; }
-
-    historialLista.innerHTML = arr.map(item => {
+    const q = sinAcentos(((document.getElementById('historial-buscar') || {}).value || '').trim().toUpperCase());
+    const lista = !q ? arr : arr.filter((it) => { const d = it.datos || {}; return sinAcentos([d.nombreCompleto, d.apellido, d.nombre, d.dni, d.numero, d.cuil].join(' ').toUpperCase()).replace(/\./g, '').includes(q.replace(/\./g, '')); });
+    if (!lista.length) { historialLista.innerHTML = '<p class="empty-state">Ninguna lectura coincide con la búsqueda</p>'; return; }
+    const minis = typeof HistorialFotos !== 'undefined' ? await HistorialFotos.miniaturas() : {};
+    const fila = (et, v) => v ? `<div class="hist-dato"><span>${esc(et)}</span><b>${esc(v)}</b></div>` : '';
+    historialLista.innerHTML = lista.map((item) => {
       const d = item.datos || {};
       const id = Number(item.id) || 0;
       const fecha = new Date(item.fecha).toLocaleString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
       const num = d.dni || d.numero || '—';
-      return `<div class="historial-item" data-id="${id}"><div class="historial-info"><div class="historial-nombre">${esc(d.nombreCompleto || 'Sin nombre')}</div><div class="historial-meta">${esc(num)} · ${esc(d.paisNombre || '')} · ${esc(fecha)}</div></div><div class="historial-actions"><button class="historial-btn" data-action="ver" data-id="${id}">👁</button><button class="historial-btn delete" data-action="borrar" data-id="${id}">✕</button></div></div>`;
+      const nac = d.fechaNacimiento ? String(d.fechaNacimiento).split('-').reverse().join('/') + (d.edad != null ? ` (${d.edad} años)` : '') : '';
+      const venc = d.fechaVencimiento ? String(d.fechaVencimiento).split('-').reverse().join('/') + (d.vigente === false ? ' · VENCIDO' : '') : '';
+      const mini = minis[id];
+      const foto = mini
+        ? `<button type="button" class="hist-foto" data-action="foto" data-id="${id}" aria-label="Ver fotos de ${esc(d.nombreCompleto || '')}"><img src="${mini}" alt=""><span>🔍</span></button>`
+        : `<div class="hist-foto vacia">Sin foto</div>`;
+      return `<div class="hist-card" data-id="${id}">
+        ${foto}
+        <div class="hist-info">
+          <div class="hist-nombre">${esc(d.nombreCompleto || 'Sin nombre')}</div>
+          <div class="hist-dni">DNI ${esc(num)}${d.sexo ? ' · ' + esc(d.sexo) : ''}</div>
+          ${fila('Nacimiento', nac)}${fila('Domicilio', d.domicilio)}${fila('CUIL', d.cuil)}${fila('Vencimiento', venc)}
+          <div class="hist-fecha">Registrado: ${esc(fecha)}</div>
+          <div class="hist-acciones">
+            <button type="button" class="historial-btn" data-action="ver" data-id="${id}">Abrir ficha</button>
+            <button type="button" class="historial-btn delete" data-action="borrar" data-id="${id}" aria-label="Borrar">🗑</button>
+          </div>
+        </div>
+      </div>`;
     }).join('');
 
-    historialLista.querySelectorAll('[data-action]').forEach(btn => {
-      btn.addEventListener('click', () => {
+    historialLista.querySelectorAll('[data-action]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
         const id = Number(btn.dataset.id);
-        if (btn.dataset.action === 'ver') {
-          const item = leerHistorial().find(x => x.id === id);
-          if (item) { render(item.datos); cerrarHistorial(); }
+        const item = leerHistorial().find((x) => x.id === id);
+        if (btn.dataset.action === 'foto') {
+          const f = typeof HistorialFotos !== 'undefined' ? await HistorialFotos.obtener(id) : null;
+          if (f && (f.frente || f.reverso) && typeof VisorFoto !== 'undefined') {
+            if (item && VisorFoto.setPrefijo) VisorFoto.setPrefijo('DNI_' + ((item.datos && (item.datos.dni || item.datos.numero)) || id));
+            VisorFoto.abrir(f.frente || f.reverso, f.frente ? 'Frente del DNI' : 'Reverso del DNI', f.frente && f.reverso ? [{ src: f.frente, nombre: 'Frente del DNI' }, { src: f.reverso, nombre: 'Reverso del DNI' }] : null);
+          }
+        } else if (btn.dataset.action === 'ver') {
+          if (!item) return;
+          render(item.datos);
+          // las fotos guardadas vuelven a la ficha (para verlas y ampliarlas)
+          const f = typeof HistorialFotos !== 'undefined' ? await HistorialFotos.obtener(id) : null;
+          ultimaFotoDataUrl = (f && f.frente) || null; ultimaFotoReversoUrl = (f && f.reverso) || null;
+          dniDeLaFoto = String((item.datos && (item.datos.dni || item.datos.numero)) || '');
+          actualizarFotosFicha();
+          if (resultado) resultado.hidden = false;
+          cerrarHistorial();
         } else {
-          escribirHistorial(leerHistorial().filter(x => x.id !== id));
+          // (dos toques: el confirm() del navegador no aparece en algunas APK)
+          if (!btn.dataset.seguro) { btn.dataset.seguro = '1'; btn.textContent = '¿Borrar? Tocá de nuevo'; btn.classList.add('confirmar'); setTimeout(() => { if (btn.isConnected) { delete btn.dataset.seguro; btn.textContent = '🗑'; btn.classList.remove('confirmar'); } }, 3500); return; }
+          escribirHistorial(leerHistorial().filter((x) => x.id !== id));
+          if (typeof HistorialFotos !== 'undefined') HistorialFotos.borrar(id);
           renderHistorial();
           actualizarContadorHistorial();
         }
       });
     });
   }
+  const sinAcentos = (t) => String(t || '').normalize('NFD').replace(/[̀-ͯ]/g, '');
 
-  function abrirHistorial() { renderHistorial(); if (modalHistorial) modalHistorial.hidden = false; }
+
+  function abrirHistorial() {
+    const b = document.getElementById('historial-buscar');
+    if (b && !b.dataset.listo) { b.dataset.listo = '1'; b.addEventListener('input', () => { clearTimeout(b._t); b._t = setTimeout(renderHistorial, 150); }); }
+    if (b) b.value = '';
+    renderHistorial(); if (modalHistorial) modalHistorial.hidden = false;
+  }
   function cerrarHistorial() { if (modalHistorial) modalHistorial.hidden = true; }
 
   async function procesarImagen(file) {
@@ -2052,7 +2110,11 @@
   if (btnGuardarHistorial) btnGuardarHistorial.addEventListener('click', guardarEnHistorial);
   if (btnHistorial) btnHistorial.addEventListener('click', abrirHistorial);
   if (btnCerrarHistorial) btnCerrarHistorial.addEventListener('click', cerrarHistorial);
-  if (btnLimpiarHistorial) { btnLimpiarHistorial.addEventListener('click', () => { if (confirm('¿Borrar todo el historial?')) { escribirHistorial([]); renderHistorial(); actualizarContadorHistorial(); } }); }
+  // (dos toques, igual que al borrar una lectura: el confirm() del navegador no aparece en algunas APK)
+  if (btnLimpiarHistorial) { const txtLimpiar = btnLimpiarHistorial.textContent; btnLimpiarHistorial.addEventListener('click', () => {
+    if (!btnLimpiarHistorial.dataset.seguro) { btnLimpiarHistorial.dataset.seguro = '1'; btnLimpiarHistorial.textContent = '¿Borrar TODO y las fotos? Tocá de nuevo'; setTimeout(() => { delete btnLimpiarHistorial.dataset.seguro; btnLimpiarHistorial.textContent = txtLimpiar; }, 3500); return; }
+    delete btnLimpiarHistorial.dataset.seguro; btnLimpiarHistorial.textContent = txtLimpiar;
+    escribirHistorial([]); if (typeof HistorialFotos !== 'undefined') HistorialFotos.borrarTodo(); renderHistorial(); actualizarContadorHistorial(); mostrarToast('Historial borrado', 'success'); }); }
   if (modalHistorial) { modalHistorial.addEventListener('click', (e) => { if (e.target === modalHistorial) cerrarHistorial(); }); }
   if (btnDomicilio) btnDomicilio.addEventListener('click', abrirModalDomicilio);
   if (btnCerrarModalDomicilio) btnCerrarModalDomicilio.addEventListener('click', cerrarModalDomicilio);
