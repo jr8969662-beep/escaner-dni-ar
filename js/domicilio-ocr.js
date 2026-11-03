@@ -1286,6 +1286,165 @@ const DomicilioOCR = (() => {
   }
 
   // ============================================
+  // REVERSO DESDE UNA SOLA FOTO (v44): el DNI ya no tiene que quedar quieto dentro del marco.
+  // Se saca UNA foto en alta resolución y la cámara se apaga (el DNI se puede soltar). Acá se ubica la tarjeta
+  // dentro de la foto por las líneas <<< (siempre en el mismo lugar del reverso) y se leen solo las dos franjas
+  // que hacen falta: domicilio y CUIL. En la APK, primero con el lector nativo (ML Kit: menos de 1 s).
+  // ============================================
+
+  // Dónde está la tarjeta en la foto, a partir de las palabras de la MRZ: [x0, y0, x1, y1] en fracciones (puede
+  // salirse un poco de 0-1: las franjas se recortan después). La MRZ ocupa el 88,5 % del ancho desde el 6,6 %
+  // y termina al 93,5 % del alto de la tarjeta (mismo cálculo que la lectura completa).
+  function tarjetaPorMRZ(palabras, W, H) {
+    const mrzPal = palabras.filter((p) => p.b && (/<</.test(p.t) || /[I1][D0O][A4]RG/.test(sinT(p.t)) || /\d{6}[0-9<]?[MF]/.test(p.t)));
+    if (mrzPal.length < 2) return null;
+    const bx0 = Math.min(...mrzPal.map((p) => p.b.x0)), bx1 = Math.max(...mrzPal.map((p) => p.b.x1)), by1 = Math.max(...mrzPal.map((p) => p.b.y1));
+    const Wc = (bx1 - bx0) / 0.885, Hc = Wc / 1.586, x0 = bx0 - 0.066 * Wc, y0 = by1 - 0.935 * Hc;
+    if (Wc < W * 0.2 || Wc > W * 1.4 || x0 < -0.2 * Wc || y0 < -0.2 * Hc) return null;
+    return [x0 / W, y0 / H, (x0 + Wc) / W, (y0 + Hc) / H];
+  }
+
+  function aCanvas(el) {
+    if (el instanceof HTMLCanvasElement) return el;
+    const c = document.createElement('canvas');
+    c.width = el.videoWidth || el.naturalWidth || el.width; c.height = el.videoHeight || el.naturalHeight || el.height;
+    c.getContext('2d').drawImage(el, 0, 0, c.width, c.height);
+    return c;
+  }
+
+  // la lectura más limpia del domicilio entre varios textos (zonas: también sin etiqueta; texto completo: solo tras "DOMICILIO")
+  function elegirDomicilio(zonas, completos = []) {
+    const c = zonas.flatMap((t) => [extraerDomicilio(t), domicilioDeZona(t)]).concat(completos.map((t) => extraerDomicilio(t)))
+      .filter(Boolean).map((v) => arreglarProvincias(arreglarSimbolos(v), true)).filter(Boolean);
+    const acuerdo = (v) => c.filter((x) => x !== v && parecido(x, v) >= 0.85).length;
+    const r = c.map((v) => ({ v, p: puntajeDireccion(v) + 2 * acuerdo(v) })).sort((a, b) => b.p - a.p)[0];
+    return r ? r.v : null;
+  }
+  function elegirCUIL(textos, ctx) {
+    return textos.map((t) => extraerCUIL(t, Object.assign({ estricto: true }, ctx))).find(Boolean)
+      || textos.map((t) => extraerCUIL(t, ctx)).find(Boolean) || null;
+  }
+
+  // APK: el lector nativo lee la foto entera con la posición de cada palabra; se toma el texto de las franjas
+  async function reversoNativo(origen, ctx) {
+    const ow = origen.naturalWidth || origen.width, oh = origen.naturalHeight || origen.height;
+    const k = Math.min(1, 1800 / ow);
+    const c = document.createElement('canvas'); c.width = Math.round(ow * k); c.height = Math.round(oh * k);
+    const cx = c.getContext('2d'); cx.imageSmoothingQuality = 'high'; cx.drawImage(origen, 0, 0, c.width, c.height);
+    const nat = await ocrNativo(c);
+    if (!nat || !nat.words.length) return null;
+    const sx = nat.w ? c.width / nat.w : 1;
+    const palabras = nat.words.map((w) => ({ t: String(w.t), b: { x0: w.x0 * sx, y0: w.y0 * sx, x1: w.x1 * sx, y1: w.y1 * sx } }));
+    const texto = nat.text || palabras.map((p) => p.t).join(' ');
+    const rel = tarjetaPorMRZ(palabras, c.width, c.height);
+    const zona = (xa, ya, xb, yb) => {
+      if (!rel) return '';
+      const X = rel[0] * c.width, Y = rel[1] * c.height, W = (rel[2] - rel[0]) * c.width, H = (rel[3] - rel[1]) * c.height;
+      return textoEnRect(palabras, X + xa * W, Y + ya * H, X + xb * W, Y + yb * H);
+    };
+    // por la etiqueta "DOMICILIO" (medida en alturas de letra), sirva o no la ubicación por la MRZ
+    const aDom = palabras.find((p) => /OMICIL|DOMICI/.test(sinT(p.t)));
+    let zDom = '';
+    if (aDom) { const h = Math.max(6, aDom.b.y1 - aDom.b.y0); zDom = textoEnRect(palabras, aDom.b.x0 - 0.6 * h, aDom.b.y0 - 0.5 * h, aDom.b.x0 + 48 * h, aDom.b.y0 + 2.9 * h); }
+    const zonasDom = [zona(-0.02, -0.07, 0.88, 0.33), zDom].filter(Boolean);
+    return {
+      rel,
+      domicilio: elegirDomicilio(zonasDom, [texto]),
+      cuil: elegirCUIL([zona(-0.02, 0.40, 0.66, 0.70), texto].filter(Boolean), ctx),
+      raw: '\n--- lector nativo ---\n' + texto
+    };
+  }
+
+  async function leerReversoFoto(fuente, contexto = {}, onProgress) {
+    const prog = typeof onProgress === 'function' ? onProgress : () => {};
+    const t0 = performance.now();
+    const origen = aCanvas(await aElemento(fuente));
+    const dni = String(contexto.dni || '').replace(/\D/g, '');
+    const sx = String(contexto.sexo || '');
+    const ctx = { dni: dni || null, sexo: /^F/i.test(sx) ? 'F' : /^M/i.test(sx) ? 'M' : null };
+    let raw = '', rel = null, domicilio = null, cuil = null, lugar = null, via = 'tesseract', textoUbic = '';
+    const fin = () => {
+      // la pasada que ubicó la tarjeta también leyó el domicilio entero (no la cortan las franjas): se elige la
+      // lectura más completa y limpia entre las dos (sumando puntos si coinciden)
+      // (en un domicilio nunca hay < > « »: es un guion mal leído)
+      const sinFlechas = (v) => String(v).replace(/\s*[<>«»]+\s*/g, ' - ').replace(/(\s-)+\s/g, ' - ').replace(/\s+/g, ' ').replace(/[\s\-]+$/, '').trim();
+      const cands = [domicilio, textoUbic && extraerDomicilio(textoUbic)].filter(Boolean).map((v) => sinFlechas(arreglarProvincias(arreglarSimbolos(v), true))).filter(Boolean);
+      if (cands.length === 1) domicilio = cands[0];
+      if (cands.length > 1) {
+        const pts = (v) => puntajeDireccion(v) + (cands.some((o) => o !== v && parecido(o, v) >= 0.85) ? 2 : 0);
+        domicilio = cands.sort((a, b) => pts(b) - pts(a) || b.length - a.length)[0];
+      }
+      prog(1); const ms = Math.round(performance.now() - t0); log('⏱ reverso desde foto: ' + ms + ' ms (' + via + ')');
+      return { domicilio, cuil, lugarNacimiento: lugar, raw, via, ms }; };
+
+    // 1) APK: lector nativo
+    if (ocrNativoDisponible()) {
+      prog(0.1);
+      let n = null;
+      try { n = await reversoNativo(origen, ctx); } catch (e) { n = null; }
+      if (n) { raw += n.raw; rel = n.rel; domicilio = n.domicilio; cuil = n.cuil; }
+      if (domicilio && cuil) { via = 'nativo'; return fin(); }
+    }
+
+    // 2) Tesseract: una pasada rápida a baja resolución, solo para ubicar la tarjeta (líneas <<<)
+    const w = await initWorker();
+    if (!rel) {
+      progresoCb = (p) => prog(p * 0.3); etapa(0, 1);
+      await w.setParameters(PARAMS_TEXTO);
+      const chica = escalarA(await preprocesar(origen), 1200);
+      const r = await w.recognize(chica, {}, { text: true, blocks: true });
+      textoUbic = r.data.text || '';
+      raw += '\n--- ubicación de la tarjeta ---\n' + textoUbic;
+      rel = tarjetaPorMRZ(palabrasDe(r.data).filter((p) => p.b), chica.width, chica.height);
+      log(rel ? '📐 tarjeta ubicada por la MRZ' : '📐 no se ubicó la tarjeta por la MRZ');
+      // la foto vino de la cámara con el marco y no se vio la MRZ: se prueba donde estaba el marco
+      if (!rel && contexto.marcoRel) rel = contexto.marcoRel;
+      // ya que se leyó, el CUIL puede salir de esta misma pasada
+      if (!cuil) cuil = elegirCUIL([r.data.text || ''], Object.assign({}, ctx, { estricto: true })) || null;
+    }
+
+    if (rel) {
+      // la tarjeta a unos 1500 px de ancho: tamaño justo de letra para el OCR (una foto 4K no lee mejor y tarda mucho más)
+      const anchoT = (rel[2] - rel[0]) * origen.width;
+      const base = anchoT > 1600 ? escalarA(origen, Math.round(origen.width * 1500 / anchoT)) : origen;
+      const zonas = async (intento, desde, hasta) => leerReversoRapido(base, { dni: ctx.dni, sexo: ctx.sexo, marcoRel: rel, conMRZ: false, intento }, (p) => prog(desde + p * (hasta - desde)));
+      let r = await zonas(1, 0.3, 0.75);
+      raw += r.raw || '';
+      domicilio = domicilio || r.domicilio; cuil = cuil || r.cuil; lugar = r.lugarNacimiento;
+      // faltó algo o el domicilio quedó dudoso: la misma foto, con las franjas más ampliadas (sin sacar otra foto)
+      if (!domicilio || !cuil || !r.limpio) {
+        const r2 = await zonas(2, 0.75, 0.98);
+        raw += r2.raw || '';
+        if (r2.domicilio && (!domicilio || (r2.limpio && !r.limpio))) domicilio = r2.domicilio;
+        cuil = cuil || r2.cuil; lugar = lugar || r2.lugarNacimiento;
+      }
+      if (domicilio || cuil) return fin();
+    }
+
+    // 3) no se encontró la tarjeta: lectura completa (gira la foto si hace falta y se ubica por las etiquetas)
+    const r = await leer(origen, 'arg', (p) => prog(0.3 + p * 0.7), { dni: ctx.dni });
+    raw += r.raw || '';
+    domicilio = domicilio || r.domicilio; cuil = cuil || r.cuil; lugar = lugar || r.lugarNacimiento;
+    via = 'completa';
+    return fin();
+  }
+
+  // CUIL a partir del DNI y el sexo (para cuando no se pudo leer). Prefijo 20 (varón) / 27 (mujer); si el dígito
+  // da 10 se usa el 23. OJO: hay casos (CUIL asignados de otra forma) en que no coincide: hay que confirmarlo.
+  function calcularCUIL(dni, sexo) {
+    const d = String(dni || '').replace(/\D/g, '');
+    if (d.length < 7 || d.length > 8) return null;
+    const pad = d.padStart(8, '0');
+    let pref = /^F/i.test(String(sexo || '')) ? '27' : /^M/i.test(String(sexo || '')) ? '20' : null;
+    if (!pref) return null;
+    const dv = (p) => { const s = (p + pad).split('').reduce((a, ch, i) => a + PESOS_CUIL[i] * Number(ch), 0); const v = 11 - (s % 11); return v === 11 ? 0 : v; };
+    let v = dv(pref);
+    if (v === 10) { pref = '23'; v = dv(pref); }
+    const c = `${pref}-${pad}-${v}`;
+    return cuilValido(c) ? c : null;
+  }
+
+  // ============================================
   // LECTURA COMPLETA
   // ============================================
   async function leer(fuente, pais = 'arg', onProgress, contexto = {}) {
@@ -1522,6 +1681,8 @@ const DomicilioOCR = (() => {
   return {
     leer: (...a) => enCola(() => leer(...a)),
     leerReversoRapido: (...a) => enCola(() => leerReversoRapido(...a)),
+    leerReversoFoto: (...a) => enCola(() => leerReversoFoto(...a)),
+    calcularCUIL,
     leerTexto: (...a) => enCola(() => leerTexto(...a)),
     leerFrente: (...a) => enCola(() => leerFrente(...a)),
     nativoDisponible: ocrNativoDisponible,
