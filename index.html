@@ -13,8 +13,12 @@
 <!-- Librerías externas -->
 <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.0/umd/index.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0"></script>
+<!-- v46: Tesseract.js 7 (más rápido y sin la pérdida de memoria de la v5). Si no carga, domicilio-ocr.js vuelve a la 5.1.1 -->
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@7.0.0/dist/tesseract.min.js"></script>
+<!-- v46: lector de códigos ZXing-C++ (WebAssembly). Registra BarcodeDetector solo si el navegador no trae uno propio;
+     scanner.js y qr-dni-nuevo.js lo usan también si el propio no lee PDF417 / QR. Si no carga, siguen ZXing-js y jsQR. -->
+<script src="https://cdn.jsdelivr.net/npm/barcode-detector@3/dist/iife/index.min.js"></script>
+<!-- (Supabase no se carga: la sincronización está desactivada. Si se configura, volver a agregar supabase-js) -->
 
 <link rel="stylesheet" href="css/styles.css">
 </head>

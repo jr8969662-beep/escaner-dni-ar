@@ -55,15 +55,34 @@ const DomicilioOCR = (() => {
 
   function etapa(desde, hasta) { etapaDesde = desde; etapaHasta = hasta; }
 
+  // Si Tesseract.js 7 no carga o no arranca en este celular, se carga la 5.1.1 (la de antes) y se reintenta una vez
+  const TESSERACT_RESPALDO = 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js';
+  let respaldoUsado = false;
+  function cargarScript(url) {
+    return new Promise((ok, no) => { const s = document.createElement('script'); s.src = url; s.onload = ok; s.onerror = () => no(new Error('no cargó ' + url)); document.head.appendChild(s); });
+  }
+  async function conRespaldo(crear) {
+    try {
+      if (typeof Tesseract === 'undefined') throw new Error('Tesseract no está');
+      return await crear();
+    } catch (e) {
+      if (respaldoUsado) throw e;
+      respaldoUsado = true;
+      log('⚠ Tesseract nuevo no arrancó (' + e + '): se usa la versión 5.1.1');
+      await cargarScript(TESSERACT_RESPALDO);
+      return crear();
+    }
+  }
+
   function initWorker() {
     if (!workerPromise) {
-      workerPromise = Tesseract.createWorker('spa', 1, {
+      workerPromise = conRespaldo(() => Tesseract.createWorker('spa', 1, {
         logger: (m) => {
           if (progresoCb && m.status === 'recognizing text') {
             progresoCb(etapaDesde + m.progress * (etapaHasta - etapaDesde));
           }
         }
-      }).then(async (w) => {
+      })).then(async (w) => {
         // primera lectura de calentamiento (chiquita): la primera de verdad tardaba 1-2 s de más inicializando el motor
         try {
           const c = document.createElement('canvas'); c.width = 160; c.height = 40;
@@ -84,7 +103,7 @@ const DomicilioOCR = (() => {
     if (!workerMRZPromise) {
       workerMRZPromise = (async () => {
         const langPath = new URL('tessdata', location.href).href;
-        const wm = await Tesseract.createWorker('ocrb_int', 1, { langPath, gzip: false });
+        const wm = await conRespaldo(() => Tesseract.createWorker('ocrb_int', 1, { langPath, gzip: false }));
         await wm.setParameters(PARAMS_MRZ);
         return wm;
       })().catch((e) => { log('MRZ: sin modelo OCR-B (' + e + ')'); return null; });
