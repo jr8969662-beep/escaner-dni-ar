@@ -63,6 +63,15 @@ const QRDNINuevo = (() => {
   // Detector nativo del teléfono (rápido y fuera del hilo principal): evita que la cámara se ponga lenta.
   let detectorNativo = null, llamadasFrame = 0;
   try { if ('BarcodeDetector' in window) detectorNativo = new BarcodeDetector({ formats: ['qr_code'] }); } catch (e) { detectorNativo = null; }
+  // v46: sin detector propio que lea QR, ZXing-C++ (barcode-detector, WebAssembly): lee el QR denso mucho mejor que jsQR
+  { const ZXCpp = typeof BarcodeDetectionAPI !== 'undefined' && BarcodeDetectionAPI.BarcodeDetector;
+    if (ZXCpp) {
+      const usarZX = () => { try { detectorNativo = new ZXCpp({ formats: ['qr_code'] }); } catch (e) { /* queda jsQR */ } };
+      if (!detectorNativo) usarZX();
+      else if (detectorNativo.constructor !== ZXCpp && typeof BarcodeDetector.getSupportedFormats === 'function') {
+        BarcodeDetector.getSupportedFormats().then((f) => { if (!f || !f.includes('qr_code')) usarZX(); }).catch(usarZX);
+      }
+    } }
 
   async function decodificarNativo(canvas) {
     try {

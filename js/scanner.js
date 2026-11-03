@@ -5,10 +5,20 @@ const DNIScanner = (() => {
   const zxingDisponible = typeof ZXing !== 'undefined';
   const jsQRDisponible = typeof jsQR === 'function';
 
+  const FORMATOS = ['pdf417', 'qr_code', 'code_128', 'code_39', 'data_matrix', 'aztec'];
   if (barcodeDisponible) {
     try {
-      barcodeDetector = new BarcodeDetector({ formats: ['pdf417', 'qr_code', 'code_128', 'code_39', 'data_matrix', 'aztec'] });
+      barcodeDetector = new BarcodeDetector({ formats: FORMATOS });
     } catch (e) { barcodeDetector = null; }
+  }
+  // v46: si el detector propio del navegador no lee PDF417 (o no hay), se usa ZXing-C++ (barcode-detector, WebAssembly)
+  const ZXCpp = typeof BarcodeDetectionAPI !== 'undefined' && BarcodeDetectionAPI.BarcodeDetector;
+  if (ZXCpp) {
+    const usarZX = () => { try { barcodeDetector = new ZXCpp({ formats: FORMATOS }); } catch (e) { /* queda el que había */ } };
+    if (!barcodeDetector) usarZX();
+    else if (barcodeDetector.constructor !== ZXCpp && typeof BarcodeDetector.getSupportedFormats === 'function') {
+      BarcodeDetector.getSupportedFormats().then((f) => { if (!f || !f.includes('pdf417')) usarZX(); }).catch(usarZX);
+    }
   }
   if (zxingDisponible) {
     try {
