@@ -74,9 +74,28 @@ const DomicilioOCR = (() => {
     }
   }
 
+  // v50: con el service worker activo, los archivos del motor se piden a ./vendor/... (los guarda para usar sin
+  // internet). Si así no arranca, se prueba como antes, directo del CDN. (Solo para la v7: las rutas son de esa versión.)
+  function rutasLocales() {
+    try {
+      if (respaldoUsado || !(navigator.serviceWorker && navigator.serviceWorker.controller)) return null;
+      if (Tesseract.version && !/^v?7\./.test(String(Tesseract.version))) return null;
+      const base = new URL('vendor/', location.href).href;
+      return { workerPath: base + 'tesseract/worker.min.js', corePath: base + 'tesseract-core', langPath: base + 'lang', workerBlobURL: false };
+    } catch (e) { return null; }
+  }
+  async function crearMotor(lang, opciones = {}) {
+    const loc = rutasLocales();
+    if (loc) {
+      try { return await Tesseract.createWorker(lang, 1, Object.assign({}, loc, opciones)); }
+      catch (e) { log('motor desde ./vendor no arrancó (' + e + '): directo del CDN'); }
+    }
+    return Tesseract.createWorker(lang, 1, opciones);
+  }
+
   function initWorker() {
     if (!workerPromise) {
-      workerPromise = conRespaldo(() => Tesseract.createWorker('spa', 1, {
+      workerPromise = conRespaldo(() => crearMotor('spa', {
         logger: (m) => {
           if (progresoCb && m.status === 'recognizing text') {
             progresoCb(etapaDesde + m.progress * (etapaHasta - etapaDesde));
@@ -103,7 +122,7 @@ const DomicilioOCR = (() => {
     if (!workerMRZPromise) {
       workerMRZPromise = (async () => {
         const langPath = new URL('tessdata', location.href).href;
-        const wm = await conRespaldo(() => Tesseract.createWorker('ocrb_int', 1, { langPath, gzip: false }));
+        const wm = await conRespaldo(() => crearMotor('ocrb_int', { langPath, gzip: false }));
         await wm.setParameters(PARAMS_MRZ);
         return wm;
       })().catch((e) => { log('MRZ: sin modelo OCR-B (' + e + ')'); return null; });
@@ -1945,6 +1964,10 @@ const DomicilioOCR = (() => {
     cancelarFrente,
     abortarFrente,
     precargarMRZ: () => { initWorkerMRZ(); },
+    prepararSinInternet: async () => {   // carga (y deja guardados) los dos motores; devuelve si quedaron listos
+      const [a, b] = await Promise.allSettled([initWorker(), initWorkerMRZ()]);
+      return { texto: a.status === 'fulfilled' && !!a.value, mrz: b.status === 'fulfilled' && !!b.value };
+    },
     pareceReverso,
     precargar,
     liberar,
