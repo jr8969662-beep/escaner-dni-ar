@@ -90,6 +90,7 @@
   let stopScan = null;
   let ultimoResultado = null;
   let ultimaFotoDataUrl = null;
+  let ultimaFotoReversoUrl = null, dniDeLaFoto = null;   // v48: foto del reverso (para verla ampliada en la ficha)
   let paisSeleccionado = localStorage.getItem(PAIS_KEY) || 'arg';
   // Tipo de DNI argentino elegido arriba de la cámara: 'viejo' (código de barras en el frente) o 'nuevo' (QR atrás).
   // Con el tipo sabido, la cámara busca solo lo que corresponde: más rápido y sin trabar la imagen.
@@ -440,7 +441,18 @@
   function setTexto(id, valor) { const el = document.getElementById(id); if (!el) return; el.textContent = (valor === null || valor === undefined || valor === '') ? '—' : String(valor); el.classList.remove('ok', 'err'); }
   function setBool(id, valor, sSi, sNo) { const el = document.getElementById(id); if (!el) return; if (valor === true) { el.textContent = sSi; el.classList.add('ok'); el.classList.remove('err'); } else if (valor === false) { el.textContent = sNo; el.classList.add('err'); el.classList.remove('ok'); } else { el.textContent = '—'; el.classList.remove('ok', 'err'); } }
   
+  // v48: miniaturas del frente y del reverso en la ficha (se tocan para verlas ampliadas, con zoom)
+  function actualizarFotosFicha() {
+    if (typeof VisorFoto === 'undefined') return;
+    try { VisorFoto.actualizarFicha({ frente: ultimaFotoDataUrl, reverso: ultimaFotoReversoUrl }); } catch (e) { /* nada */ }
+  }
+
   function render(d) {
+    // otra persona: la foto del reverso de la anterior ya no corresponde
+    const dniNuevo = d && (d.dni || d.numero) ? String(d.dni || d.numero) : null;
+    if (dniNuevo && dniDeLaFoto && dniNuevo !== dniDeLaFoto) ultimaFotoReversoUrl = null;
+    if (dniNuevo) dniDeLaFoto = dniNuevo;
+    setTimeout(actualizarFotosFicha, 0);
     ultimoResultado = d;
     const esChile = d.pais === 'CHL', esUruguay = d.pais === 'URY', esParaguay = d.pais === 'PRY', esBrasil = d.pais === 'BRA';
     if (labelNumero) { if (esChile) labelNumero.textContent = 'RUN'; else if (esUruguay || esParaguay) labelNumero.textContent = 'Número de CI'; else if (esBrasil) labelNumero.textContent = 'Número de pasaporte'; else labelNumero.textContent = 'Número de DNI'; }
@@ -821,7 +833,7 @@
     if (btnCapturarDomicilio) btnCapturarDomicilio.hidden = true;
     asegurarBotonCamaraNativa(false);
     if (domicilioVideo) domicilioVideo.hidden = true;
-    if (domicilioPreview) { domicilioPreview.src = foto.toDataURL('image/jpeg', 0.7); domicilioPreview.hidden = false; }
+    if (domicilioPreview) { domicilioPreview.src = foto.toDataURL('image/jpeg', 0.88); domicilioPreview.hidden = false; }   // (calidad alta: se puede ampliar)
     if (domicilioResultado) domicilioResultado.hidden = true;
     if (domicilioProgress) domicilioProgress.hidden = false;
     if (domicilioProgressFill) domicilioProgressFill.style.width = '0%';
@@ -1301,6 +1313,8 @@
 
   // Si no hubo escaneo del frente (DNI nuevo), el resultado se arma desde la MRZ del reverso.
   function guardarDomicilioDesdeModal() {
+    // la foto del reverso queda para verla en la ficha
+    if (domicilioPreview && !domicilioPreview.hidden && domicilioPreview.src && /^(data:|blob:)/.test(domicilioPreview.src)) ultimaFotoReversoUrl = domicilioPreview.src;
     if (!ultimoResultado && ultimaIdentidad) ultimoResultado = datosDesdeIdentidad(ultimaIdentidad);
     if (!ultimoResultado) return;
     if (!ultimoResultado.tramite && tramiteReverso) ultimoResultado.tramite = tramiteReverso;
@@ -2029,7 +2043,7 @@
 
   if (btnCamara) btnCamara.addEventListener('click', iniciarCamara);
   if (btnRetryCamara) btnRetryCamara.addEventListener('click', iniciarCamara);
-  if (btnRepetir) { btnRepetir.addEventListener('click', async () => { if (resultado) resultado.hidden = true; if (img) { img.hidden = true; img.src = ''; } if (video) video.hidden = false; btnRepetir.hidden = true; if (estado) { estado.textContent = 'Apuntá al código del documento.'; estado.classList.remove('ok', 'error'); } if (escaneoEstado) escaneoEstado.textContent = ''; await iniciarCamara(); }); }
+  if (btnRepetir) { btnRepetir.addEventListener('click', async () => { ultimaFotoReversoUrl = null; dniDeLaFoto = null; if (resultado) resultado.hidden = true; if (img) { img.hidden = true; img.src = ''; } if (video) video.hidden = false; btnRepetir.hidden = true; if (estado) { estado.textContent = 'Apuntá al código del documento.'; estado.classList.remove('ok', 'error'); } if (escaneoEstado) escaneoEstado.textContent = ''; await iniciarCamara(); }); }
   if (btnFlash) { btnFlash.addEventListener('click', async () => { if (!trackActual || !flashSoportado) return; try { flashEncendido = !flashEncendido; await trackActual.applyConstraints({ advanced: [{ torch: flashEncendido }] }); btnFlash.classList.toggle('encendido', flashEncendido); autoFlashActivo = false; } catch (e) {} }); }
   if (btnUpload) btnUpload.addEventListener('click', () => fileInput.click());
   if (fileInput) { fileInput.addEventListener('change', (e) => { const file = e.target.files[0]; if (!file) return; procesarImagen(file); fileInput.value = ''; }); }
