@@ -1,10 +1,10 @@
 // Service worker - Escáner de Documentos
 // Subilo al repo con el nombre sw.js. Subí el número de CACHE_NAME en cada cambio grande.
-const CACHE_NAME = 'escaner-dni-v48';
+const CACHE_NAME = 'escaner-dni-v49';
 const ASSETS = [
   './', './index.html', './manifest.json', './css/styles.css', './icons/icon-192.png', './icons/icon-512.png',
   './tessdata/ocrb_int.traineddata', './js/version.js', './js/validators.js', './js/parsers-mundo.js', './js/parser.js', './js/parser-dni-nuevo.js',
-  './js/decodificador.js', './js/decodificador-worker.js', './js/scanner.js', './js/domicilio-ocr.js', './js/qr-dni-nuevo.js', './js/frente-dni.js', './js/visor-foto.js', './js/main.js',
+  './js/decodificador.js', './js/decodificador-worker.js', './js/scanner.js', './js/domicilio-ocr.js', './js/qr-dni-nuevo.js', './js/frente-dni.js', './js/historial-fotos.js', './js/visor-foto.js', './js/main.js',
   'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js',
   'https://cdn.jsdelivr.net/npm/@zxing/library@0.21.0/umd/index.min.js',
   'https://cdn.jsdelivr.net/npm/tesseract.js@7.0.0/dist/tesseract.min.js',

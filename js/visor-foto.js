@@ -34,12 +34,19 @@ const VisorFoto = (() => {
         color: #fff; font: 600 20px system-ui, sans-serif; display: grid; place-items: center; cursor: pointer; }
       .visor-btn:active { background: rgba(255,255,255,.2); }
       .visor-nivel { min-width: 52px; text-align: center; font: 600 13px system-ui, sans-serif; color: #c9a227; }
+      .visor-galeria { display: flex; justify-content: center; gap: 8px; padding: 0 12px 8px; }
+      .visor-galeria[hidden] { display: none; }
+      .visor-galeria button { padding: 7px 16px; border-radius: 999px; border: 1px solid rgba(255,255,255,.25); background: transparent; color: #fff;
+        font: 600 13px system-ui, sans-serif; cursor: pointer; }
+      .visor-galeria button.activo { background: #c9a227; border-color: #c9a227; color: #0a1220; }
       .visor-lienzo { position: relative; flex: 1; overflow: hidden; cursor: grab; }
       .visor-lienzo.arrastrando { cursor: grabbing; }
       .visor-lienzo img { position: absolute; left: 50%; top: 50%; max-width: none; transform-origin: 0 0; will-change: transform;
         image-rendering: auto; -webkit-user-drag: none; pointer-events: none; }
       .visor-ayuda { text-align: center; color: rgba(255,255,255,.6); font: 12px system-ui, sans-serif; padding: 6px 12px 10px; }
       .foto-ampliable { cursor: zoom-in; }
+      .visor-aviso { position: absolute; left: 50%; bottom: calc(44px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); background: rgba(201,162,39,.95);
+        color: #0a1220; font: 600 13px system-ui, sans-serif; padding: 8px 14px; border-radius: 999px; opacity: 0; transition: opacity .2s; pointer-events: none; }
       .fotos-ficha { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 6px; }
       .foto-mini { position: relative; border-radius: 10px; overflow: hidden; border: 1px solid var(--border, rgba(255,255,255,.15));
         background: #000; aspect-ratio: 1.586; padding: 0; cursor: zoom-in; }
@@ -63,8 +70,10 @@ const VisorFoto = (() => {
         <button type="button" class="visor-btn" data-accion="menos" aria-label="Alejar">−</button>
         <span class="visor-nivel">100%</span>
         <button type="button" class="visor-btn" data-accion="mas" aria-label="Acercar">+</button>
+        <button type="button" class="visor-btn" data-accion="guardar" aria-label="Guardar foto" title="Guardar foto en el celular">⬇</button>
         <button type="button" class="visor-btn" data-accion="cerrar" aria-label="Cerrar">✕</button>
       </div>
+      <div class="visor-galeria" hidden></div>
       <div class="visor-lienzo"><img alt="Foto ampliada"></div>
       <div class="visor-ayuda">Pellizcá o tocá dos veces para ampliar · arrastrá para moverte</div>`;
     document.body.appendChild(raiz);
@@ -77,6 +86,7 @@ const VisorFoto = (() => {
       const b = e.target.closest('[data-accion]'); if (!b) return;
       const r = lienzo.getBoundingClientRect(), cx = r.width / 2, cy = r.height / 2;
       if (b.dataset.accion === 'cerrar') cerrar();
+      else if (b.dataset.accion === 'guardar') guardarActual(b);
       else if (b.dataset.accion === 'mas') zoomEn(escala * 1.6, cx, cy, true);
       else if (b.dataset.accion === 'menos') zoomEn(escala / 1.6, cx, cy, true);
     });
@@ -184,14 +194,51 @@ const VisorFoto = (() => {
     } else if (!punteros.size) { gesto = null; lienzo.classList.remove('arrastrando'); }
   }
 
-  function abrir(src, nombre) {
-    if (!src) return;
-    crear();
+  // nombre del archivo al guardar: "DNI_25122169_reverso_2026-11-03.jpg" (el prefijo lo pone la app con el DNI)
+  let prefijo = 'DNI', actual = { src: null, nombre: 'Foto' };
+  function setPrefijo(p) { prefijo = String(p || 'DNI').replace(/[^\w\-]+/g, '_'); }
+  async function guardarActual(btn) {
+    if (!actual.src) return;
+    const parte = /reverso/i.test(actual.nombre) ? 'reverso' : /frente/i.test(actual.nombre) ? 'frente' : 'foto';
+    const nombre = prefijo + '_' + parte + '_' + new Date().toISOString().slice(0, 10) + '.jpg';
+    if (typeof HistorialFotos === 'undefined') return;
+    if (btn) btn.disabled = true;
+    const r = await HistorialFotos.descargar(actual.src, nombre);
+    if (btn) btn.disabled = false;
+    avisar(r === 'compartida' ? '✓ Foto lista para guardar' : r === 'descargada' ? '✓ Foto guardada en Descargas' : r === 'cancelada' ? 'Cancelado' : 'No se pudo guardar la foto');
+  }
+  function avisar(txt) {
+    let t = raiz.querySelector('.visor-aviso');
+    if (!t) { t = document.createElement('div'); t.className = 'visor-aviso'; raiz.appendChild(t); }
+    t.textContent = txt; t.style.opacity = '1';
+    clearTimeout(avisar.tm); avisar.tm = setTimeout(() => { t.style.opacity = '0'; }, 2200);
+  }
+
+  // galeria (opcional): [{ src, nombre }, …] -> botones para pasar de una foto a otra (frente / reverso)
+  function mostrar(src, nombre) {
+    actual = { src, nombre: nombre || 'Foto' };
     titulo.textContent = nombre || 'Foto';
     punteros.clear(); gesto = null;
+    if (imagen.src === src && imagen.complete) ajustarBase(); else imagen.src = src;
+    const gal = raiz.querySelector('.visor-galeria');
+    gal.querySelectorAll('button').forEach((b) => b.classList.toggle('activo', b.dataset.src === src));
+  }
+  function abrir(src, nombre, galeria) {
+    if (!src) return;
+    crear();
+    const gal = raiz.querySelector('.visor-galeria');
+    gal.innerHTML = '';
+    const lista = Array.isArray(galeria) ? galeria.filter((g) => g && g.src) : [];
+    gal.hidden = lista.length < 2;
+    lista.forEach((g) => {
+      const b = document.createElement('button'); b.type = 'button'; b.dataset.src = g.src;
+      b.textContent = String(g.nombre || '').replace(/ del DNI$/, '');
+      b.addEventListener('click', () => mostrar(g.src, g.nombre));
+      gal.appendChild(b);
+    });
     raiz.hidden = false;
     document.documentElement.style.overflow = 'hidden';
-    if (imagen.src === src && imagen.complete) ajustarBase(); else imagen.src = src;
+    mostrar(src, nombre);
     try { history.pushState({ visorFoto: true }, ''); abiertoConHistorial = true; } catch (e) { abiertoConHistorial = false; }
   }
 
@@ -211,7 +258,11 @@ const VisorFoto = (() => {
     const img = e.target.closest && e.target.closest('img');
     if (img && AMPLIABLES[img.id] && !img.hidden && img.src) { e.preventDefault(); e.stopPropagation(); abrir(img.src, AMPLIABLES[img.id]); return; }
     const mini = e.target.closest && e.target.closest('.foto-mini[data-src]');
-    if (mini) { e.preventDefault(); abrir(mini.dataset.src, mini.dataset.titulo); }
+    if (mini) {
+      e.preventDefault();
+      const todas = [...document.querySelectorAll('#grupo-fotos .foto-mini[data-src]')].map((m) => ({ src: m.dataset.src, nombre: m.dataset.titulo }));
+      abrir(mini.dataset.src, mini.dataset.titulo, todas);
+    }
   }, true);
 
   // ---- miniaturas en la ficha ----
@@ -251,5 +302,5 @@ const VisorFoto = (() => {
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', marcarAmpliables); else marcarAmpliables();
 
-  return { abrir, cerrar, actualizarFicha };
+  return { abrir, cerrar, actualizarFicha, setPrefijo };
 })();
