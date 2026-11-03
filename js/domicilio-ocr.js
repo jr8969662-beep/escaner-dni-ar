@@ -350,14 +350,14 @@ const DomicilioOCR = (() => {
     return true;
   }
 
-  async function leerFrente(fuente, onProgress, suficiente) {
+  async function leerFrente(fuente, onProgress, suficiente, opciones = {}) {
     frenteEnCurso++;
     const corte = new Promise((_, rej) => { cortarFrente = rej; });
-    const tarea = leerFrenteInterno(fuente, onProgress, suficiente);
+    const tarea = leerFrenteInterno(fuente, onProgress, suficiente, opciones);
     tarea.catch(() => {});
     try { return await Promise.race([tarea, corte]); } finally { frenteEnCurso--; cortarFrente = null; }
   }
-  async function leerFrenteInterno(fuente, onProgress, suficiente) {
+  async function leerFrenteInterno(fuente, onProgress, suficiente, opciones = {}) {
     const gen = generacionFrente;
     const cancelado = () => gen !== generacionFrente;
     progresoCb = typeof onProgress === 'function' ? onProgress : null;
@@ -368,6 +368,12 @@ const DomicilioOCR = (() => {
         if (rn && cancelado()) { rn.cancelado = true; return rn; }
         // si el motor nativo leyó todo (o es el reverso) se termina acá; si quedó algo sin leer, se sigue con Tesseract (más lento, pero revisa zona por zona)
         if (rn && (rn.esReverso || typeof suficiente !== 'function' || suficiente(rn))) return rn;
+        // v47: con lo esencial (DNI, apellido, nombre y nacimiento) se usa la lectura nativa igual: lo que falte
+        // (emisión / vencimiento) sale del reverso (QR y líneas <<<). Antes se rehacía TODO con Tesseract (varios segundos).
+        if (rn && typeof FrenteDNI !== 'undefined') {
+          const d = FrenteDNI.parsearVarios(rn);
+          if (d && d.dni && d.apellido && d.nombre && d.fechaNacimiento) { log('⚡ nativo con lo esencial: se usa'); rn.parcial = true; return rn; }
+        }
         if (rn) log('⚡ nativo incompleto: se sigue con Tesseract');
       } catch (e) { log('nativo: ' + e); }
     }
@@ -402,16 +408,21 @@ const DomicilioOCR = (() => {
     etapa(0, 0.3);
     await setPsm('11');
     // (a menor resolución: las etiquetas son grandes y la pasada tarda la mitad; los datos se releen ampliados más abajo)
-    const kDesc = Math.min(1, ANCHO_GENERAL / grisF.width);
+    // (se probó leer solo la zona de los datos del DNI nuevo: con el DNI no justo en el marco salían peor las zonas
+    //  y terminaba en más pasadas; se lee la tarjeta entera)
+    const rec = null;
+    // (misma escala que si se leyera la tarjeta entera a ANCHO_GENERAL: el tamaño de letra no cambia)
+    const kDesc = Math.min(1, ANCHO_GENERAL / (rec ? (relF[2] - relF[0]) * grisF.width : grisF.width));
     let entradaDesc = grisF;
-    if (kDesc < 0.97) {
+    if (kDesc < 0.97 || rec) {
+      const sx = rec ? rec.x : 0, sy = rec ? rec.y : 0, sw = rec ? rec.w : grisF.width, sh = rec ? rec.h : grisF.height;
       entradaDesc = document.createElement('canvas');
-      entradaDesc.width = Math.round(grisF.width * kDesc); entradaDesc.height = Math.round(grisF.height * kDesc);
+      entradaDesc.width = Math.round(sw * kDesc); entradaDesc.height = Math.round(sh * kDesc);
       const dc = entradaDesc.getContext('2d'); dc.imageSmoothingQuality = 'high';
-      dc.drawImage(grisF, 0, 0, entradaDesc.width, entradaDesc.height);
+      dc.drawImage(grisF, sx, sy, sw, sh, 0, 0, entradaDesc.width, entradaDesc.height);
     }
     const r1 = await w.recognize(entradaDesc, {}, { text: true, blocks: true });
-    log('⏱ pasada general ' + dt() + ' (' + entradaDesc.width + 'x' + entradaDesc.height + ')');
+    log('⏱ pasada general ' + dt() + ' (' + entradaDesc.width + 'x' + entradaDesc.height + (rec ? ', solo la zona de datos' : '') + ')');
     textos.push(r1.data.text || '');
     log('📄 OCR frente (disperso):\n' + r1.data.text);
     if (cancelado()) { await w.setParameters(PARAMS_TEXTO); textos.cancelado = true; return textos; }
@@ -422,9 +433,19 @@ const DomicilioOCR = (() => {
 
     // 2) zonas debajo de las etiquetas: nombres, fechas, número y trámite, releídos ampliados
     textos.zonas = { nac: [], emi: [], ven: [], doc: [], tramite: [], ejemplar: [], fila: [] };
-    const palabrasF = palabrasDe(r1.data).map((p) => (p.b && kDesc < 0.97)
-      ? { t: p.t, b: { x0: p.b.x0 / kDesc, y0: p.b.y0 / kDesc, x1: p.b.x1 / kDesc, y1: p.b.y1 / kDesc } } : p);
-    const etiquetas = armarEtiquetas(palabrasF);
+    const ox = rec ? rec.x : 0, oy = rec ? rec.y : 0;
+    const palabrasF = palabrasDe(r1.data).map((p) => (p.b && (kDesc < 0.97 || rec))
+      ? { t: p.t, b: { x0: p.b.x0 / kDesc + ox, y0: p.b.y0 / kDesc + oy, x1: p.b.x1 / kDesc + ox, y1: p.b.y1 / kDesc + oy } } : p);
+    let etiquetas = armarEtiquetas(palabrasF);
+    if (rec && new Set(etiquetas.map((e) => e.k)).size < 4 && !cancelado()) {
+      log('⚠ con el recorte se vieron pocas etiquetas: se lee la tarjeta entera');
+      const k2 = Math.min(1, ANCHO_GENERAL / grisF.width), ent = k2 < 0.97 ? escalarA(grisF, Math.round(grisF.width * k2)) : grisF;
+      const r2 = await w.recognize(ent, {}, { text: true, blocks: true });
+      textos.push(r2.data.text || '');
+      palabrasF.length = 0;
+      palabrasDe(r2.data).forEach((p) => palabrasF.push(p.b && k2 < 0.97 ? { t: p.t, b: { x0: p.b.x0 / k2, y0: p.b.y0 / k2, x1: p.b.x1 / k2, y1: p.b.y1 / k2 } } : p));
+      etiquetas = armarEtiquetas(palabrasF);
+    }
     if (etiquetas.length) {
       await setPsm('7');
       // nombres y ejemplar (una letra suelta que la pasada general casi nunca ve) siempre se releen
@@ -437,9 +458,21 @@ const DomicilioOCR = (() => {
         if (cancelado()) break;
         etapa(0.3 + i * (0.2 / etiquetas.length), 0.3 + (i + 1) * (0.2 / etiquetas.length));
         const e = etiquetas[i], h = Math.max(8, e.b.y1 - e.b.y0);
-        const x0 = Math.max(0, Math.round(e.b.x0 - e.izq * h)), x1 = Math.min(gris.width, Math.round(e.x1Abs || (x0 + e.ancho * h)));
-        const y0 = Math.max(0, Math.round(e.yAbs ? e.yAbs[0] : e.b.y1 + (e.k === 'ejemplar' || e.k === 'fila' ? 0.15 : 0.1) * h)),
+        const x0 = Math.max(0, Math.round(e.b.x0 - e.izq * h));
+        let x1 = Math.min(gris.width, Math.round(e.x1Abs || (x0 + e.ancho * h)));
+        const esNombre = e.k === 'apellido' || e.k === 'nombre';
+        // (apellido / nombre: el renglón empieza pegado a la etiqueta; con +0,1 se cortaba la parte de arriba de las letras)
+        const y0 = Math.max(0, Math.round(e.yAbs ? e.yAbs[0] : e.b.y1 + (e.k === 'ejemplar' || e.k === 'fila' ? 0.15 : esNombre ? -0.2 : 0.1) * h)),
           y1 = Math.min(gris.height, Math.round(e.yAbs ? e.yAbs[1] : e.b.y1 + (e.alto || 2.4) * h));
+        // apellido / nombre: la zona termina donde termina el texto (palabras de la pasada general en ese renglón) y no
+        // agarra el holograma, la foto ni el mapa de la derecha, que el OCR confunde con letras
+        if (esNombre && !e.x1Abs) {
+          const enFila = palabrasF.filter((p) => p.b && (p.b.y0 + p.b.y1) / 2 > y0 && (p.b.y0 + p.b.y1) / 2 < y1 && p.b.x1 > x0 && p.b.x0 < x1 && /[A-ZÁÉÍÓÚÑ]{2,}/.test(p.t))
+            .sort((a, b) => a.b.x0 - b.b.x0);
+          let fin = null;
+          for (const p of enFila) { if (fin === null ? p.b.x0 - x0 < 8 * h : p.b.x0 - fin < 3 * h) fin = Math.max(fin || 0, p.b.x1); }
+          if (fin) x1 = Math.min(x1, Math.round(fin + 4 * h));
+        }
         if (x1 - x0 < 20 || y1 - y0 < 8) continue;
         const esc = Math.max(1, Math.min(4, 48 / h));
         const recorte = (base) => {   // con borde blanco: Tesseract lee peor las letras pegadas al borde
@@ -457,7 +490,8 @@ const DomicilioOCR = (() => {
         destino.push(text || '');
         log('📄 zona ' + e.k + ': ' + text);
         // fechas / números que no salieron legibles: otra vez con la luz normalizada
-        const pareceDato = e.k === 'apellido' || e.k === 'nombre' || e.k === 'ejemplar' || e.k === 'fila' ? true
+        // (apellido / nombre: si no salió una palabra de 3 letras o más, otra vez con la luz normalizada)
+        const pareceDato = esNombre ? /[A-ZÁÉÍÓÚÑ]{3,}/.test(text || '') : e.k === 'ejemplar' || e.k === 'fila' ? true
           : (e.k === 'doc' ? /\d{2}[.\s]?\d{3}[.\s]?\d{3}/.test(text) : e.k === 'tramite' ? /\d{11}/.test(text) : /\d{1,2}\s*[.\/A-Z]{1,4}[^\n]*(19|20)\d{2}/i.test(text));
         if (!pareceDato) {
           const { data: { text: t2 } } = await w.recognize(recorte(grisF));
