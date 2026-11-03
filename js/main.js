@@ -778,7 +778,7 @@
     const sexo = String((ultimoResultado && ultimoResultado.sexo) || '');
     let r = null;
     try {
-      r = await DomicilioOCR.leerReversoFoto(foto, { dni, sexo, marcoRel }, (p) => { if (domicilioProgressFill) domicilioProgressFill.style.width = Math.round(p * 100) + '%'; });
+      r = await DomicilioOCR.leerReversoFoto(foto, { dni, sexo, marcoRel, tipo: tipoDNI }, (p) => { if (domicilioProgressFill) domicilioProgressFill.style.width = Math.round(p * 100) + '%'; });
     } catch (e) { console.warn('Reverso (foto):', e); }
     // CUIL: si no se pudo leer, se calcula con el DNI y el sexo (y se avisa que hay que confirmarlo)
     let cuil = r && r.cuil, cuilCalculado = false;
