@@ -351,3 +351,6 @@ html, body { overflow-x: hidden; }
 .btn-foto.ocupado { opacity: .5; pointer-events: none; }
 .camera-viewport.flash-foto::after { content: ""; position: absolute; inset: 0; background: #fff; opacity: .55; z-index: 7; pointer-events: none; animation: flashFoto .22s ease-out forwards; }
 @keyframes flashFoto { to { opacity: 0; } }
+
+/* v44: CUIL calculado (no leído): se marca para que se confirme con el documento */
+.domicilio-input.dato-calculado { border-color: #f59e0b !important; box-shadow: 0 0 0 2px rgba(245, 158, 11, .25); }

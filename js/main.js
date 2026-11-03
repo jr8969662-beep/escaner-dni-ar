@@ -639,6 +639,8 @@
       if (ultimoResultado && (!ultimoResultado.sexo || !ultimoResultado.fechaVencimiento) && DomicilioOCR.precargarMRZ) DomicilioOCR.precargarMRZ();
     }
 
+    modoFotoReverso = false; if (btnCapturarDomicilio) { btnCapturarDomicilio.textContent = TEXTO_BTN_CAPTURAR; btnCapturarDomicilio.disabled = false; }
+    if (domInputCuil) domInputCuil.classList.remove('dato-calculado');
     if (modalDomicilio) modalDomicilio.hidden = false; if (domicilioPreview) domicilioPreview.hidden = true; if (domicilioResultado) domicilioResultado.hidden = true; if (domicilioProgress) domicilioProgress.hidden = true;
     if (btnCapturarDomicilio) btnCapturarDomicilio.hidden = false; if (btnReintentarDomicilio) btnReintentarDomicilio.hidden = true; if (btnGuardarDomicilio) btnGuardarDomicilio.hidden = true;
     [domInputDomicilio, domInputNacimiento, domInputCuil, domInputVencimiento, domInputNacionalidad].forEach(inp => { if (inp) inp.value = ''; });
@@ -655,9 +657,154 @@
       await new Promise((resolve) => { if (domicilioVideo.videoWidth > 0) return resolve(); const check = setInterval(() => { if (domicilioVideo.videoWidth > 0) { clearInterval(check); resolve(); } }, 100); setTimeout(() => { clearInterval(check); resolve(); }, 2000); });
       prepararMarcoDomicilio(); iniciarMonitorLuz();
 
-      // INICIAR AUTO-ESCANEO
-      iniciarAutoScanDomicilio();
-    } catch (e) { mostrarToast('No se pudo acceder a la cámara', 'error'); if (modalDomicilio) modalDomicilio.hidden = true; }
+      // v44: con el frente ya leído, el reverso se lee de UNA foto (no hay que sostener el DNI en el marco).
+      // Si no, el auto-escaneo de siempre (DNI nuevo sin frente, otros casos).
+      if (usarModoFoto()) prepararModoFoto(); else iniciarAutoScanDomicilio();
+    } catch (e) {
+      // sin cámara en la página: si se puede, la cámara del celular (foto) en lugar de cerrar
+      if (usarModoFoto() && camaraNativaUsable()) {
+        modoFotoReverso = true;
+        if (domicilioVideo) domicilioVideo.hidden = true;
+        asegurarBotonCamaraNativa(true);
+        mostrarToast('Tocá «Cámara del celular» para sacarle una foto al reverso', 'error');
+      } else { mostrarToast('No se pudo acceder a la cámara', 'error'); if (modalDomicilio) modalDomicilio.hidden = true; }
+    }
+  }
+
+  // ===== REVERSO CON UNA FOTO (v44) =====
+  // Antes: el OCR corría sobre el video y había que sostener el DNI quieto dentro del marco hasta que leyera.
+  // Ahora: se toca «Sacar foto», se saca una foto en alta resolución, se apaga la cámara (el DNI se puede soltar)
+  // y de esa foto se leen el domicilio y el CUIL. La tarjeta se ubica sola dentro de la foto: no hace falta que
+  // quede justo en el marco. El CUIL se controla con el DNI del frente y su dígito verificador.
+  let modoFotoReverso = false;
+  const TEXTO_BTN_CAPTURAR = btnCapturarDomicilio ? btnCapturarDomicilio.textContent : '📸 Capturar y leer';
+  const HINT_FOTO = 'Mostrá el reverso y tocá «Sacar foto»';
+  const hintBase = () => (modoFotoReverso ? HINT_FOTO : HINT_OK);
+
+  function usarModoFoto() {
+    return !modoReversoNuevo && paisSeleccionado === 'arg' && !!ultimoResultado && !!(ultimoResultado.dni || ultimoResultado.numero) &&
+      typeof DomicilioOCR !== 'undefined' && typeof DomicilioOCR.leerReversoFoto === 'function';
+  }
+  // la cámara del sistema (input con capture) funciona en el navegador; en la APK depende de la app, así que ahí no se ofrece
+  function camaraNativaUsable() { return !(DomicilioOCR.nativoDisponible && DomicilioOCR.nativoDisponible()); }
+
+  function prepararModoFoto() {
+    modoFotoReverso = true;
+    autoScanActivo = false; autoScanProcesando = false;
+    if (domicilioProgress) domicilioProgress.hidden = true;
+    if (btnCapturarDomicilio) { btnCapturarDomicilio.textContent = '📸 Sacar foto'; btnCapturarDomicilio.hidden = false; btnCapturarDomicilio.disabled = false; }
+    asegurarBotonCamaraNativa(camaraNativaUsable());
+    const txt = document.getElementById('dni-marco-hint'); if (txt) txt.textContent = HINT_FOTO;
+    // la resolución alta se pide ya, mientras se acomoda el DNI: así la foto sale nítida y sin esperar
+    if (typeof subirResolucion === 'function') subirResolucion();
+  }
+
+  function asegurarBotonCamaraNativa(mostrar) {
+    let b = document.getElementById('btn-camara-nativa');
+    if (!b && mostrar && btnCapturarDomicilio && btnCapturarDomicilio.parentNode) {
+      const inp = document.createElement('input');
+      inp.type = 'file'; inp.accept = 'image/*'; inp.setAttribute('capture', 'environment'); inp.hidden = true; inp.id = 'input-camara-nativa';
+      inp.addEventListener('change', async () => {
+        const f = inp.files && inp.files[0]; inp.value = '';
+        if (!f) return;
+        try { await procesarFotoReverso(await canvasDeBlob(f), null); }
+        catch (e) { console.warn('Foto del reverso:', e); mostrarToast('No se pudo abrir la foto', 'error'); }
+      });
+      inp.addEventListener('cancel', () => { if (!domicilioStream && modoFotoReverso && modalDomicilio && !modalDomicilio.hidden) reintentarDomicilio(); });
+      document.body.appendChild(inp);
+      b = document.createElement('button');
+      b.type = 'button'; b.id = 'btn-camara-nativa'; b.className = 'btn btn-secondary btn-sm';
+      b.textContent = '📷 Cámara del celular';
+      b.title = 'Sacar la foto con la cámara del teléfono';
+      b.addEventListener('click', () => { detenerCamaraModal(); inp.click(); });
+      btnCapturarDomicilio.parentNode.insertBefore(b, btnCapturarDomicilio);
+    }
+    if (b) b.hidden = !mostrar;
+  }
+
+  // foto (archivo o blob) → canvas de hasta 2600 px de lado, ya derecha (respeta la orientación de la foto)
+  async function canvasDeBlob(blob) {
+    let bmp = null;
+    try { bmp = await createImageBitmap(blob, { imageOrientation: 'from-image' }); } catch (e) { bmp = null; }
+    if (!bmp) {
+      bmp = await new Promise((ok, no) => { const im = new Image(); im.onload = () => ok(im); im.onerror = () => no(new Error('imagen')); im.src = URL.createObjectURL(blob); });
+    }
+    const w0 = bmp.width || bmp.naturalWidth, h0 = bmp.height || bmp.naturalHeight;
+    const k = Math.min(1, 2600 / Math.max(w0, h0));
+    const c = document.createElement('canvas'); c.width = Math.round(w0 * k); c.height = Math.round(h0 * k);
+    const x = c.getContext('2d'); x.imageSmoothingQuality = 'high'; x.drawImage(bmp, 0, 0, c.width, c.height);
+    if (bmp.close) bmp.close();
+    return c;
+  }
+
+  async function tomarFotoReverso() {
+    if (!domicilioVideo || !domicilioVideo.videoWidth) { mostrarToast('La cámara todavía no está lista', 'error'); return; }
+    if (btnCapturarDomicilio) btnCapturarDomicilio.disabled = true;
+    asegurarBotonCamaraNativa(false);
+    const txt = document.getElementById('dni-marco-hint'); if (txt) txt.textContent = '📸 Sacando foto… no muevas el DNI';
+    let foto = null, marcoRel = null;
+    // 1) foto del sensor (máxima resolución, con autofoco), si el navegador lo permite
+    try {
+      if (typeof ImageCapture !== 'undefined' && domicilioTrack && domicilioTrack.readyState === 'live') {
+        const ic = new ImageCapture(domicilioTrack);
+        const blob = await Promise.race([ic.takePhoto(), new Promise((_, no) => setTimeout(() => no(new Error('tiempo')), 2500))]);
+        foto = await canvasDeBlob(blob);
+      }
+    } catch (e) { foto = null; }
+    // 2) si no: el cuadro más nítido del video, ENTERO (la tarjeta se ubica sola; se guarda dónde estaba el marco por las dudas)
+    if (!foto) {
+      foto = await capturarMasNitido(domicilioVideo, 3, 70);
+      try { const r = rectEnVideo(domicilioVideo, marcoClient(), 0); const vw = domicilioVideo.videoWidth, vh = domicilioVideo.videoHeight;
+        if (r.w > 50 && r.h > 50) marcoRel = [r.x / vw, r.y / vh, (r.x + r.w) / vw, (r.y + r.h) / vh]; } catch (e) { marcoRel = null; }
+    }
+    if (btnCapturarDomicilio) btnCapturarDomicilio.disabled = false;
+    detenerCamaraModal();
+    vibrarExito();
+    await procesarFotoReverso(foto, marcoRel);
+  }
+
+  async function procesarFotoReverso(foto, marcoRel) {
+    modoFotoReverso = true;
+    ocultarMarcoDomicilio(); detenerMonitorLuz();
+    if (btnCapturarDomicilio) btnCapturarDomicilio.hidden = true;
+    asegurarBotonCamaraNativa(false);
+    if (domicilioVideo) domicilioVideo.hidden = true;
+    if (domicilioPreview) { domicilioPreview.src = foto.toDataURL('image/jpeg', 0.7); domicilioPreview.hidden = false; }
+    if (domicilioResultado) domicilioResultado.hidden = true;
+    if (domicilioProgress) domicilioProgress.hidden = false;
+    if (domicilioProgressFill) domicilioProgressFill.style.width = '0%';
+    if (domicilioProgressText) domicilioProgressText.textContent = '✓ Foto lista: ya podés soltar el DNI · leyendo domicilio y CUIL…';
+    const dni = String((ultimoResultado && (ultimoResultado.dni || ultimoResultado.numero)) || '').replace(/\D/g, '');
+    const sexo = String((ultimoResultado && ultimoResultado.sexo) || '');
+    let r = null;
+    try {
+      r = await DomicilioOCR.leerReversoFoto(foto, { dni, sexo, marcoRel }, (p) => { if (domicilioProgressFill) domicilioProgressFill.style.width = Math.round(p * 100) + '%'; });
+    } catch (e) { console.warn('Reverso (foto):', e); }
+    // CUIL: si no se pudo leer, se calcula con el DNI y el sexo (y se avisa que hay que confirmarlo)
+    let cuil = r && r.cuil, cuilCalculado = false;
+    if (!cuil && dni && DomicilioOCR.calcularCUIL) { cuil = DomicilioOCR.calcularCUIL(dni, sexo); cuilCalculado = !!cuil; }
+
+    if (domInputDomicilio) domInputDomicilio.value = (r && r.domicilio) || '';
+    if (domInputNacimiento) domInputNacimiento.value = (r && r.lugarNacimiento) || '';
+    if (domInputCuil) domInputCuil.value = cuil || '';
+    if (domInputVencimiento) domInputVencimiento.value = (ultimoResultado && ultimoResultado.fechaVencimiento) || '';
+    if (domInputNacionalidad) domInputNacionalidad.value = (ultimoResultado && ultimoResultado.nacionalidad) || '';
+    if (domicilioProgress) domicilioProgress.hidden = true;
+    if (domicilioResultado) domicilioResultado.hidden = false;
+    if (btnGuardarDomicilio) btnGuardarDomicilio.hidden = false;
+    if (btnReintentarDomicilio) btnReintentarDomicilio.hidden = false;
+    mostrarDebugOCR(((r && r.raw) || '') + (r ? `\n\n[${r.via} · ${r.ms} ms]` : ''));
+
+    const estadoCuil = cuilCalculado ? '⚠ CUIL calculado con DNI y sexo: confirmalo con el documento'
+      : cuil ? '✓ CUIL coincide con el DNI' : '';
+    const info = document.querySelector('.domicilio-info');
+    if (info) info.textContent = [`${(ultimoResultado && ultimoResultado.nombreCompleto) || ''} · DNI ${dni}`, estadoCuil].filter(Boolean).join(' · ');
+    if (domInputCuil) domInputCuil.classList.toggle('dato-calculado', cuilCalculado);
+
+    const faltan = [!(r && r.domicilio) && 'domicilio', !cuil && 'CUIL'].filter(Boolean);
+    if (faltan.length) mostrarToast('No se leyó: ' + faltan.join(' ni ') + '. Escribilo o tocá Reintentar.', 'error');
+    else if (cuilCalculado) mostrarToast('✓ Domicilio leído · CUIL calculado: revisalo', 'success');
+    else { mostrarToast('✓ Domicilio y CUIL leídos', 'success'); reproducirSonidoExito(); }
   }
   
   async function cerrarModalDomicilio() {
@@ -668,6 +815,8 @@
     if (modalDomicilio) modalDomicilio.hidden = true; domicilioTrack = null; domicilioFlashSoportado = false; domicilioFlashEncendido = false; if (domicilioFlashBtn) domicilioFlashBtn.classList.remove('encendido');
     if (modoReversoNuevo && !ultimoResultado && btnCamara) btnCamara.hidden = false;
     modoReversoNuevo = false;
+    modoFotoReverso = false; asegurarBotonCamaraNativa(false);
+    if (btnCapturarDomicilio) { btnCapturarDomicilio.textContent = TEXTO_BTN_CAPTURAR; btnCapturarDomicilio.disabled = false; }
   }
 
   function detenerCamaraModal() {
@@ -806,7 +955,7 @@
       else if (!e.encendida && e.media < UMBRAL_OSCURO && e.ahora >= e.noEncenderHasta) accion = 'encender';
     }
     const hint = e.quemado > UMBRAL_REFLEJO ? 'Hay reflejo: inclinalo un poco'
-      : (e.media < 60 ? 'Poca luz: acercate a una lámpara' : HINT_OK);
+      : (e.media < 60 ? 'Poca luz: acercate a una lámpara' : hintBase());
     return { accion, hint };
   }
 
@@ -846,7 +995,7 @@
       if (accion === 'apagar') { await apagarLinternaReverso(); ultimoCambioLinterna = ahora; noEncenderHasta = ahora + 6000; }
       const marco = document.getElementById('dni-marco'), txt = document.getElementById('dni-marco-hint');
       if (txt) txt.textContent = hint;
-      if (marco) marco.classList.toggle('alerta', hint !== HINT_OK);
+      if (marco) marco.classList.toggle('alerta', hint !== hintBase());
     }, 600);
   }
 
@@ -1845,7 +1994,7 @@
   if (btnReintentarDomicilio) btnReintentarDomicilio.addEventListener('click', reintentarDomicilio);
   if (btnGuardarDomicilio) btnGuardarDomicilio.addEventListener('click', guardarDomicilioDesdeModal);
   if (domicilioFlashBtn) domicilioFlashBtn.addEventListener('click', () => { linternaManual = true; toggleLinternaReverso(); });
-  if (btnCapturarDomicilio) btnCapturarDomicilio.addEventListener('click', iniciarAutoScanDomicilio);
+  if (btnCapturarDomicilio) btnCapturarDomicilio.addEventListener('click', () => { if (modoFotoReverso) tomarFotoReverso(); else iniciarAutoScanDomicilio(); });
   if (modalDomicilio) { modalDomicilio.addEventListener('click', (e) => { if (e.target === modalDomicilio) cerrarModalDomicilio(); }); }
 
   window.addEventListener('beforeunload', () => { if (stream) stream.getTracks().forEach(t => t.stop()); if (domicilioStream) domicilioStream.getTracks().forEach(t => t.stop()); if (stopScan) stopScan(); });
