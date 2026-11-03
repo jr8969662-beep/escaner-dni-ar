@@ -1759,7 +1759,7 @@
         canvasF = fotoDada || await capturarFrenteRecortado(2, 80);
         const textos = await DomicilioOCR.leerFrente(canvasF, (p) => {
           if (escaneoEstado) escaneoEstado.textContent = `🔍 Leyendo el frente… ${Math.round(p * 100)}%`;
-        }, (t) => FrenteDNI.completo(FrenteDNI.parsearVarios(t)));
+        }, (t) => FrenteDNI.completo(FrenteDNI.parsearVarios(t)), { tipo: tipoDNI });
         if (textos && textos.cancelado) { cancelada = true; break; }
         if (textos && textos.esReverso) { textosCrudos = textos; break; }
         datosF = FrenteDNI.parsearVarios(textos);
@@ -1947,14 +1947,14 @@
     const ref = await capturarFrenteRecortado(1, 0);   // cuadro del video como referencia de nitidez
     const sRef = ref ? nitidezNorm(ref) : 0;
     let mejor = null, sMejor = -1;
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < 2; i++) {   // (v47: hasta 2 fotos, antes 3: cada foto del sensor tarda 1-2 s)
       let f = await fotoDelSensor(0.22);
       if (!f && i === 0) f = await fotoDelVideo(4);
       if (!f) break;
       const s = nitidezNorm(f);
       log('📸 foto ' + (i + 1) + ': ' + f.origen + ' ' + f.width + 'x' + f.height + ' nitidez ' + s.toFixed(1) + ' (video ' + sRef.toFixed(1) + ')');
       if (s > sMejor) { sMejor = s; mejor = f; }
-      if (!mejor.origen.startsWith('sensor') || s >= sRef * 0.85) break;   // alcanza: tan nítida como el video o más
+      if (!mejor.origen.startsWith('sensor') || s >= sRef * 0.7) break;   // alcanza: casi tan nítida como el video (la foto tiene más resolución)
       if (escaneoEstado) escaneoEstado.textContent = '📸 Salió algo movida… sacando otra, mantené quieto';
       await dormir(250);
     }

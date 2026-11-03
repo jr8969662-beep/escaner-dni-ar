@@ -275,7 +275,10 @@ const FrenteDNI = (() => {
     let v = cands.map(normalizarNombre).map(sinEtiqueta).filter((x) => x && x.replace(/ /g, '').length >= 3 && !esEncabezado(x));
     if (!v.length) return null;
     // "ACT GONZALEZ" / "GONZALEZ ACT": si otra lectura es la misma sin un pedazo corto de ruido, vale como esa
-    v = v.map((x) => v.find((y) => y !== x && y.length >= 3 && ((x.endsWith(' ' + y) && x.length - y.length <= 7) || (x.startsWith(y + ' ') && x.length - y.length <= 4))) || x);
+    // (solo si el pedazo de más es corto —hasta 3 letras— y no es un nombre real: "RAMIRO ERNESTO" no es "ERNESTO" con ruido)
+    const NOMBRES_CORTOS = /^(ANA|EVA|LUZ|SOL|PAZ|PIO|LEO|IAN|NOA|MIA|EMA|ROY|ADA|AVA|ZOE|LIA|TEO|GIL|LUZ|FE|EMI|ISA|BEA|MAR|LIZ)$/;
+    const ruido = (p) => p.length <= 3 && !NOMBRES_CORTOS.test(p);
+    v = v.map((x) => v.find((y) => y !== x && y.length >= 3 && ((x.endsWith(' ' + y) && ruido(x.slice(0, x.length - y.length - 1))) || (x.startsWith(y + ' ') && ruido(x.slice(y.length + 1))))) || x);
     const grupos = [];
     v.forEach((x) => {
       const g = grupos.find((gr) => similitud(gr[0], x) >= 0.8);
@@ -283,7 +286,9 @@ const FrenteDNI = (() => {
     });
     // "RAMIRO" y "RAMIRO ERNESTO": la lectura corta es la larga con un nombre perdido (el OCR cortó el renglón),
     // no otro nombre. Sus votos pasan al grupo largo: si no, ganaba el nombre solo y se perdía el segundo.
-    const extiende = (x, y) => x.startsWith(y + ' ') && x.slice(y.length + 1).split(' ').every((t) => t.length >= 3 || PARTICULAS.test(t));
+    // (también al revés: "ERNESTO" y "RAMIRO ERNESTO", cuando el OCR perdió el primer nombre)
+    const extiende = (x, y) => (x.startsWith(y + ' ') && x.slice(y.length + 1).split(' ').every((t) => t.length >= 3 || PARTICULAS.test(t)))
+      || (x.endsWith(' ' + y) && x.slice(0, x.length - y.length - 1).split(' ').every((t) => t.length >= 3 || PARTICULAS.test(t)));
     grupos.forEach((gc) => {
       const largo = grupos.find((gl) => gl !== gc && gl.length && extiende(gl[0], gc[0]));
       if (largo) { gc.forEach(() => largo.push(largo[0])); gc.length = 0; }
