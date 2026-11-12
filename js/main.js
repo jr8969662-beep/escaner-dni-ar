@@ -497,7 +497,7 @@
 
   function leerHistorial() { try { const raw = localStorage.getItem(STORAGE_KEY); return raw ? JSON.parse(raw) : []; } catch (e) { return []; } }
   function escribirHistorial(arr) { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(arr)); } catch (e) {} }
-  function actualizarContadorHistorial() { const arr = leerHistorial(); if (historialCount) historialCount.textContent = arr.length; if (btnHistorial) btnHistorial.style.display = arr.length > 0 ? 'flex' : 'none'; }
+  function actualizarContadorHistorial() { const arr = leerHistorial(); if (historialCount) historialCount.textContent = arr.length; if (btnHistorial) btnHistorial.style.display = (arr.length > 0 || (typeof Nube !== 'undefined' && Nube.activa())) ? 'flex' : 'none'; }
   
   async function guardarEnHistorial() {
     if (!ultimoResultado) return;
@@ -514,6 +514,12 @@
       HistorialFotos.guardar(id, { frente: ultimaFotoDataUrl, reverso: ultimaFotoReversoUrl })
         .then((ok) => { mostrarToast(ok ? '✓ Registrado con las fotos' : 'Registrado (las fotos no se pudieron guardar)', ok ? 'success' : 'error'); return HistorialFotos.dejarSolo(leerHistorial().map((x) => x.id)); })
         .catch(() => mostrarToast('Registrado (las fotos no se pudieron guardar)', 'error'));
+    }
+
+    if (typeof Nube !== 'undefined' && Nube.activa()) {
+      // las fotos tardan un instante en quedar guardadas en el celular: se sube cuando ya están
+      Nube.encolar(id);
+      setTimeout(() => subirANube(true), 600);
     }
 
     if (supabaseClient && ultimaFotoDataUrl) {
@@ -561,6 +567,7 @@
   // v49: historial con la foto al lado de los datos de la persona (las fotos se guardan en el celular, en IndexedDB)
   async function renderHistorial() {
     if (!historialLista) return;
+    if (modoHistorial === 'nube') return renderNube();
     const arr = leerHistorial();
     if (arr.length === 0) { historialLista.innerHTML = '<p class="empty-state">No hay escaneos guardados</p>'; return; }
     const q = sinAcentos(((document.getElementById('historial-buscar') || {}).value || '').trim().toUpperCase());
@@ -632,9 +639,162 @@
     const b = document.getElementById('historial-buscar');
     if (b && !b.dataset.listo) { b.dataset.listo = '1'; b.addEventListener('input', () => { clearTimeout(b._t); b._t = setTimeout(renderHistorial, 150); }); }
     if (b) b.value = '';
-    renderHistorial(); if (modalHistorial) modalHistorial.hidden = false;
+    // en la PC (sin lecturas propias) se abre directo en "Todos los aparatos"
+    const tabNube = document.querySelector('#hist-tabs [data-modo="nube"]');
+    if (tabNube && modoHistorial === 'local' && typeof Nube !== 'undefined' && Nube.activa() && !leerHistorial().length) { tabNube.click(); }
+    else renderHistorial();
+    if (modalHistorial) modalHistorial.hidden = false;
   }
   function cerrarHistorial() { if (modalHistorial) modalHistorial.hidden = true; }
+
+  // ---------- v53: nube (lo que se guarda en el celular aparece en la PC y al revés) ----------
+  let modoHistorial = 'local';
+  const nubeEstado = document.getElementById('nube-estado');
+  function estadoNube(texto, error) { if (!nubeEstado) return; nubeEstado.textContent = texto || ''; nubeEstado.hidden = !texto; nubeEstado.classList.toggle('error', !!error); }
+  function marcarBotonNube() { const b = document.getElementById('btn-nube'); if (b) { const a = typeof Nube !== 'undefined' && Nube.activa(); b.classList.toggle('activa', a); b.textContent = a ? '☁ Conectado' : '☁ Nube'; } }
+  function subirANube(avisar) {
+    if (typeof Nube === 'undefined' || !Nube.activa() || !Nube.pendientes().length) return Promise.resolve(0);
+    return Nube.procesar(
+      (id) => leerHistorial().find((x) => x.id === id) || null,
+      (id) => (typeof HistorialFotos !== 'undefined' ? HistorialFotos.obtener(id) : null),
+      (hechos, err) => {
+        if (err) { if (avisar && !err.sinRed) mostrarToast('No se pudo subir a la nube: ' + err.message, 'error'); }
+        else if (hechos && avisar) mostrarToast('☁ Subido: ya se ve en la PC', 'success');
+        if (modoHistorial === 'nube' && modalHistorial && !modalHistorial.hidden) renderNube();
+      });
+  }
+  window.addEventListener('online', () => subirANube(false));
+  setTimeout(() => subirANube(false), 4000);
+
+  function tarjetaNube(it) {
+    const d = it.datos || {};
+    const fecha = new Date(it.fecha).toLocaleString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+    const nac = d.fechaNacimiento ? String(d.fechaNacimiento).split('-').reverse().join('/') + (d.edad != null ? ` (${d.edad} años)` : '') : '';
+    const venc = d.fechaVencimiento ? String(d.fechaVencimiento).split('-').reverse().join('/') + (d.vigente === false ? ' · VENCIDO' : '') : '';
+    const fila = (et, v) => v ? `<div class="hist-dato"><span>${esc(et)}</span><b>${esc(v)}</b></div>` : '';
+    const tieneFoto = it.fotos && (it.fotos.frente || it.fotos.reverso);
+    const id = esc(String(it.id));
+    return `<div class="hist-card" data-id="${id}">
+      ${tieneFoto ? `<button type="button" class="hist-foto" data-accion="foto" data-id="${id}" aria-label="Ver fotos"><img alt="" data-ruta="${esc(it.fotos.frente || it.fotos.reverso)}"><span>🔍</span></button>` : '<div class="hist-foto vacia">Sin foto</div>'}
+      <div class="hist-info">
+        <div class="hist-nombre">${esc(d.nombreCompleto || 'Sin nombre')}</div>
+        <div class="hist-dni">DNI ${esc(d.dni || d.numero || '—')}${d.sexo ? ' · ' + esc(d.sexo) : ''}</div>
+        ${fila('Nacimiento', nac)}${fila('Domicilio', d.domicilio)}${fila('CUIL', d.cuil)}${fila('Vencimiento', venc)}
+        <div class="hist-fecha">Registrado: ${esc(fecha)}<span class="hist-aparato">${esc(it.aparato || '')}</span></div>
+        <div class="hist-acciones">
+          <button type="button" class="historial-btn" data-accion="ver" data-id="${id}">Abrir ficha</button>
+          <button type="button" class="historial-btn delete" data-accion="borrar" data-id="${id}" aria-label="Borrar de la nube">🗑</button>
+        </div>
+      </div>
+    </div>`;
+  }
+  let nubeLista = [];
+  function pintarNube() {
+    const q = sinAcentos(((document.getElementById('historial-buscar') || {}).value || '').trim().toUpperCase()).replace(/\./g, '');
+    const lista = !q ? nubeLista : nubeLista.filter((it) => { const d = it.datos || {}; return sinAcentos([d.nombreCompleto, d.apellido, d.nombre, d.dni, d.numero, d.cuil, it.aparato].join(' ').toUpperCase()).replace(/\./g, '').includes(q); });
+    if (!nubeLista.length) { historialLista.innerHTML = '<p class="empty-state">Todavía no hay lecturas en la nube</p>'; return; }
+    if (!lista.length) { historialLista.innerHTML = '<p class="empty-state">Ninguna lectura coincide con la búsqueda</p>'; return; }
+    historialLista.innerHTML = lista.map(tarjetaNube).join('');
+    // miniaturas: se traen de a poco
+    historialLista.querySelectorAll('img[data-ruta]').forEach((im) => { Nube.foto(im.dataset.ruta).then((u) => { if (u) im.src = u; }).catch(() => {}); });
+    historialLista.querySelectorAll('[data-accion]').forEach((btn) => btn.addEventListener('click', async () => {
+      const it = nubeLista.find((x) => String(x.id) === btn.dataset.id); if (!it) return;
+      const f = it.fotos || {};
+      if (btn.dataset.accion === 'foto') {
+        const [fr, rv] = await Promise.all([Nube.foto(f.frente).catch(() => null), Nube.foto(f.reverso).catch(() => null)]);
+        if ((fr || rv) && typeof VisorFoto !== 'undefined') {
+          if (VisorFoto.setPrefijo) VisorFoto.setPrefijo('DNI_' + ((it.datos && (it.datos.dni || it.datos.numero)) || it.id));
+          VisorFoto.abrir(fr || rv, fr ? 'Frente del DNI' : 'Reverso del DNI', fr && rv ? [{ src: fr, nombre: 'Frente del DNI' }, { src: rv, nombre: 'Reverso del DNI' }] : null);
+        }
+      } else if (btn.dataset.accion === 'ver') {
+        btn.disabled = true;
+        const [fr, rv] = await Promise.all([Nube.foto(f.frente).catch(() => null), Nube.foto(f.reverso).catch(() => null)]);
+        render(it.datos || {});
+        ultimaFotoDataUrl = fr || null; ultimaFotoCompletaUrl = null; ultimaFotoReversoUrl = rv || null;
+        dniDeLaFoto = String((it.datos && (it.datos.dni || it.datos.numero)) || '');
+        actualizarFotosFicha();
+        if (resultado) resultado.hidden = false;
+        cerrarHistorial();
+      } else if (btn.dataset.accion === 'borrar') {
+        if (!btn.dataset.seguro) { btn.dataset.seguro = '1'; btn.textContent = '¿Borrar de la nube? Tocá de nuevo'; btn.classList.add('confirmar'); setTimeout(() => { if (btn.isConnected) { delete btn.dataset.seguro; btn.textContent = '🗑'; btn.classList.remove('confirmar'); } }, 3500); return; }
+        btn.disabled = true;
+        try { await Nube.borrar(it.id); nubeLista = nubeLista.filter((x) => x !== it); pintarNube(); mostrarToast('Borrado de la nube', 'success'); }
+        catch (e) { mostrarToast(e.message, 'error'); btn.disabled = false; }
+      }
+    }));
+  }
+  async function renderNube() {
+    if (typeof Nube === 'undefined' || !Nube.activa()) {
+      estadoNube('');
+      historialLista.innerHTML = '<div class="empty-state">Para ver acá lo que se escanea en el celular y en la PC, tocá <b>☁ Nube</b> y conectá este aparato.<br><br><button type="button" class="btn btn-primary" id="btn-nube-ir">Conectar la nube</button></div>';
+      const b = document.getElementById('btn-nube-ir'); if (b) b.addEventListener('click', abrirNube);
+      return;
+    }
+    nubeLista = Nube.enCache(); pintarNube();
+    const p = Nube.pendientes().length;
+    estadoNube('Actualizando…' + (p ? ` · ${p} de este aparato sin subir todavía` : ''));
+    try {
+      if (p) await subirANube(false);
+      nubeLista = await Nube.listar();
+      const p2 = Nube.pendientes().length;
+      estadoNube((nubeLista.length === 1 ? '1 lectura en total' : `${nubeLista.length} lecturas en total`) + (p2 ? ` · ${p2} de este aparato sin subir (falta internet)` : ''));
+      if (modoHistorial === 'nube') pintarNube();
+    } catch (e) { estadoNube(e.message + (nubeLista.length ? ' (se muestran las últimas que se vieron)' : ''), true); }
+  }
+  document.querySelectorAll('#hist-tabs .hist-tab').forEach((t) => t.addEventListener('click', () => {
+    modoHistorial = t.dataset.modo;
+    document.querySelectorAll('#hist-tabs .hist-tab').forEach((x) => x.classList.toggle('activa', x === t));
+    if (modoHistorial === 'local') estadoNube('');
+    if (btnLimpiarHistorial) btnLimpiarHistorial.hidden = modoHistorial === 'nube';
+    renderHistorial();
+  }));
+
+  // configuración
+  const modalNube = document.getElementById('modal-nube');
+  const nubeMsg = document.getElementById('nube-msg');
+  function msgNube(t, error) { if (!nubeMsg) return; nubeMsg.textContent = t || ''; nubeMsg.hidden = !t; nubeMsg.classList.toggle('error', !!error); }
+  function abrirNube() {
+    if (!modalNube || typeof Nube === 'undefined') return;
+    const c = Nube.config() || {};
+    document.getElementById('nube-repo').value = c.repo || '';
+    document.getElementById('nube-token').value = c.token ? '••••••••••••' : '';
+    document.getElementById('nube-aparato').value = c.aparato || (/Android|iPhone|iPad/i.test(navigator.userAgent) ? 'Celular' : 'PC');
+    document.getElementById('btn-nube-desconectar').hidden = !Nube.activa();
+    msgNube(Nube.activa() ? '✓ Este aparato está conectado a ' + c.repo : '');
+    modalNube.hidden = false;
+  }
+  const btnNube = document.getElementById('btn-nube'); if (btnNube) btnNube.addEventListener('click', abrirNube);
+  const btnCerrarNube = document.getElementById('btn-cerrar-nube'); if (btnCerrarNube) btnCerrarNube.addEventListener('click', () => { modalNube.hidden = true; });
+  const btnConectar = document.getElementById('btn-nube-conectar');
+  if (btnConectar) btnConectar.addEventListener('click', async () => {
+    const anterior = Nube.config();
+    let token = document.getElementById('nube-token').value.trim();
+    if (/^•+$/.test(token) && anterior) token = anterior.token;
+    try { Nube.guardarConfig(document.getElementById('nube-repo').value, token, document.getElementById('nube-aparato').value); }
+    catch (e) { msgNube(e.message, true); return; }
+    btnConectar.disabled = true; msgNube('Probando la conexión con GitHub…');
+    try {
+      await Nube.probar();
+      // lo que ya estaba guardado en este aparato también se sube (una sola vez)
+      if (!anterior) leerHistorial().slice().reverse().forEach((x) => Nube.encolar(x.id));
+      msgNube('✓ Conectado. Lo que guardes acá se va a ver en los otros aparatos.');
+      document.getElementById('btn-nube-desconectar').hidden = false;
+      marcarBotonNube(); actualizarContadorHistorial();
+      subirANube(true);
+      if (modoHistorial === 'nube') renderNube();
+    } catch (e) {
+      if (anterior) { Nube.desconectar(); Nube.guardarConfig(anterior.repo, anterior.token, anterior.aparato); } else Nube.desconectar();
+      msgNube(e.message, true);
+    } finally { btnConectar.disabled = false; }
+  });
+  const btnDesconectar = document.getElementById('btn-nube-desconectar');
+  if (btnDesconectar) btnDesconectar.addEventListener('click', () => {
+    Nube.desconectar(); marcarBotonNube(); actualizarContadorHistorial();
+    btnDesconectar.hidden = true; document.getElementById('nube-token').value = '';
+    msgNube('Este aparato ya no está conectado. Lo que está en GitHub no se borró.');
+    if (modoHistorial === 'nube') renderNube();
+  });
+  marcarBotonNube();
 
   async function procesarImagen(file) {
     const reader = new FileReader();

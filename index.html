@@ -337,14 +337,50 @@
   <div class="modal-content">
     <div class="modal-header">
       <h2>Registro de lecturas</h2>
+      <button type="button" class="nube-btn" id="btn-nube" aria-label="Compartir con la PC">☁ Nube</button>
       <button type="button" class="icon-btn-close" id="btn-cerrar-historial">✕</button>
     </div>
+    <div class="hist-tabs" id="hist-tabs" role="tablist">
+      <button type="button" role="tab" class="hist-tab activa" data-modo="local">Este aparato</button>
+      <button type="button" role="tab" class="hist-tab" data-modo="nube">☁ Todos los aparatos</button>
+    </div>
+    <div class="nube-estado" id="nube-estado" hidden></div>
     <div class="historial-buscar"><input type="search" id="historial-buscar" placeholder="🔎 Buscar por apellido, nombre o DNI" autocomplete="off" aria-label="Buscar en el historial"></div>
     <div class="modal-body" id="historial-lista">
       <p class="empty-state">No hay lecturas registradas todavía</p>
     </div>
     <div class="modal-footer">
       <button type="button" class="btn btn-secondary btn-sm" id="btn-limpiar-historial">Limpiar todo</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="modal-nube" hidden>
+  <div class="modal-content">
+    <div class="modal-header">
+      <h2>☁ Compartir lecturas con la PC</h2>
+      <button type="button" class="icon-btn-close" id="btn-cerrar-nube">✕</button>
+    </div>
+    <div class="modal-body nube-form">
+      <p class="nube-explica">Lo que guardes en el celular aparece en la PC (y al revés). Se guarda en un repositorio <b>privado</b> de tu GitHub. Cargá lo mismo en el celular y en la PC.</p>
+      <label>Repositorio privado<input id="nube-repo" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="usuario/escaner-dni-datos"></label>
+      <label>Clave de GitHub (token)<input id="nube-token" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="github_pat_..."></label>
+      <label>Nombre de este aparato<input id="nube-aparato" type="text" maxlength="40" placeholder="Celular / PC"></label>
+      <div class="nube-msg" id="nube-msg" hidden></div>
+      <div class="nube-acciones">
+        <button type="button" class="btn btn-primary" id="btn-nube-conectar">Conectar</button>
+        <button type="button" class="btn btn-secondary" id="btn-nube-desconectar" hidden>Desconectar este aparato</button>
+      </div>
+      <details class="nube-ayuda">
+        <summary>¿Cómo saco el repositorio y la clave? (una sola vez)</summary>
+        <ol>
+          <li>En GitHub tocá <b>+ → New repository</b>. Nombre: <b>escaner-dni-datos</b>. Marcá <b>Private</b> y tocá <b>Create repository</b>.</li>
+          <li>Andá a <b>Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token</b>.</li>
+          <li>En <b>Repository access</b> elegí <b>Only select repositories</b> y marcá <b>escaner-dni-datos</b>.</li>
+          <li>En <b>Permissions → Repository permissions → Contents</b> elegí <b>Read and write</b>.</li>
+          <li>Tocá <b>Generate token</b>, copiá la clave y pegala acá (en el celular y en la PC).</li>
+        </ol>
+      </details>
     </div>
   </div>
 </div>
@@ -363,6 +399,7 @@
 <script src="js/frente-dni.js"></script>
 <script src="js/historial-fotos.js"></script>
 <script src="js/encuadre.js"></script>
+<script src="js/nube.js"></script>
 <script src="js/visor-foto.js"></script>
 <script src="js/sin-internet.js"></script>
 <script src="js/main.js"></script>
