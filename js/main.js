@@ -90,6 +90,20 @@
   let stopScan = null;
   let ultimoResultado = null;
   let ultimaFotoDataUrl = null;
+  let ultimaFotoCompletaUrl = null;   // la foto entera (sin enderezar): la usa la lectura del texto del frente
+  // Encuadre automático: deja el DNI derecho y recortado; si no encuentra los bordes con seguridad, queda la foto como está
+  function fotoEnderezada(c, zona) {
+    try { if (typeof Encuadre === 'undefined' || !c) return c; const r = Encuadre.enderezar(c, zona); return r ? r.canvas : c; } catch (e) { return c; }
+  }
+  function zonaDelMarco(c) {   // dónde está el marco de escaneo, en píxeles de la foto c (sacada del video entero)
+    try {
+      if (!scanFrame || !video || !video.videoWidth || video.hidden) return null;
+      const b = scanFrame.getBoundingClientRect(); if (b.width < 40 || b.height < 40) return null;
+      const r = rectEnVideo(video, { left: b.left, top: b.top, width: b.width, height: b.height }, 0);
+      const k = c.width / video.videoWidth;
+      return r ? { x: r.x * k, y: r.y * k, w: r.w * k, h: r.h * k } : null;
+    } catch (e) { return null; }
+  }
   let ultimaFotoReversoUrl = null, dniDeLaFoto = null;   // v48: foto del reverso (para verla ampliada en la ficha)
   let paisSeleccionado = localStorage.getItem(PAIS_KEY) || 'arg';
   // Tipo de DNI argentino elegido arriba de la cámara: 'viejo' (código de barras en el frente) o 'nuevo' (QR atrás).
@@ -397,7 +411,8 @@
     if (flashEncendido && trackActual) { trackActual.applyConstraints({ advanced: [{ torch: false }] }).catch(() => {}); flashEncendido = false; autoFlashActivo = false; if (btnFlash) btnFlash.classList.remove('encendido'); }
     
     const dataUrl = canvas.toDataURL('image/jpeg', 0.92); 
-    ultimaFotoDataUrl = dataUrl;
+    ultimaFotoCompletaUrl = dataUrl;
+    ultimaFotoDataUrl = fotoEnderezada(canvas, zonaDelMarco(canvas)).toDataURL('image/jpeg', 0.92);
     
     if (img) { img.src = dataUrl; img.hidden = false; } video.hidden = true;
     if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; } trackActual = null; if (zoomControl) zoomControl.hidden = true;
@@ -594,7 +609,7 @@
           render(item.datos);
           // las fotos guardadas vuelven a la ficha (para verlas y ampliarlas)
           const f = typeof HistorialFotos !== 'undefined' ? await HistorialFotos.obtener(id) : null;
-          ultimaFotoDataUrl = (f && f.frente) || null; ultimaFotoReversoUrl = (f && f.reverso) || null;
+          ultimaFotoDataUrl = (f && f.frente) || null; ultimaFotoCompletaUrl = null; ultimaFotoReversoUrl = (f && f.reverso) || null;
           dniDeLaFoto = String((item.datos && (item.datos.dni || item.datos.numero)) || '');
           actualizarFotosFicha();
           if (resultado) resultado.hidden = false;
@@ -651,7 +666,7 @@
         if (paisDelDocumento && paisDelDocumento !== paisSeleccionado) { const nd = nombrePaisDesdeCodigo(paisDelDocumento); mostrarErrorDocumento('Documento incorrecto', `Elegiste <strong>${paisElegidoNombre}</strong> pero este documento parece ser de <strong>${nd}</strong>.`); if (estado) { estado.textContent = `⚠️ Este documento es de ${nd}`; estado.classList.add('error'); } setStatus('Documento incorrecto', 'error'); if (btnRepetir) btnRepetir.hidden = false; destacarChipPais(paisDelDocumento); reproducirSonidoError(); vibrarError(); return; }
         
         const datos = parsearSeguro(texto);
-        ultimaFotoDataUrl = src;
+        ultimaFotoDataUrl = src; ultimaFotoCompletaUrl = null;
         
         if (datos && (datos.dni || datos.numero || datos.apellido || datos.nombre)) { render(datos); if (estado) { estado.textContent = '✓ ' + (datos.nombreCompleto || datos.dni || datos.numero); estado.classList.remove('error'); estado.classList.add('ok'); } if (escaneoEstado) escaneoEstado.textContent = '✅ Escaneo OK'; setStatus('Escaneo OK', 'active'); if (btnRepetir) btnRepetir.hidden = false; reproducirSonidoExito(); vibrarExito(); setTimeout(completarDesdeFrente, 2500); precargarMotorMRZ(); return; }
         mostrarErrorDocumento('Documento no reconocido', `No pudimos interpretar este código como un documento de ${paisElegidoNombre}.`); if (estado) { estado.textContent = '⚠️ No se pudieron extraer datos'; estado.classList.add('error'); } setStatus('Sin datos', 'error'); if (btnRepetir) btnRepetir.hidden = false; reproducirSonidoError(); vibrarError();
@@ -891,7 +906,7 @@
     if (btnCapturarDomicilio) btnCapturarDomicilio.hidden = true;
     asegurarBotonCamaraNativa(false);
     if (domicilioVideo) domicilioVideo.hidden = true;
-    if (domicilioPreview) { domicilioPreview.src = foto.toDataURL('image/jpeg', 0.88); domicilioPreview.hidden = false; }   // (calidad alta: se puede ampliar)
+    if (domicilioPreview) { domicilioPreview.src = fotoEnderezada(foto).toDataURL('image/jpeg', 0.92); domicilioPreview.hidden = false; }   // (calidad alta: se puede ampliar)
     if (domicilioResultado) domicilioResultado.hidden = true;
     if (domicilioProgress) domicilioProgress.hidden = false;
     if (domicilioProgressFill) domicilioProgressFill.style.width = '0%';
@@ -1268,7 +1283,7 @@
       if (autoScanActivo && (acumR.domicilio || acumR.cuil || acumR.lugarNacimiento)) {
         autoScanProcesando = false; autoScanActivo = false;
         detenerCamaraModal();
-        if (domicilioPreview && mejorR) { domicilioPreview.src = mejorR.toDataURL('image/jpeg', 0.7); domicilioPreview.hidden = false; }
+        if (domicilioPreview && mejorR) { domicilioPreview.src = fotoEnderezada(mejorR).toDataURL('image/jpeg', 0.92); domicilioPreview.hidden = false; }
         if (domicilioVideo) domicilioVideo.hidden = true;
         if (domInputDomicilio) domInputDomicilio.value = acumR.domicilio || '';
         if (domInputNacimiento) domInputNacimiento.value = acumR.lugarNacimiento || '';
@@ -1341,7 +1356,7 @@
     ultimaIdentidad = hayIdentidad ? combinarIdentidad(qr, ident) : null;
     tramiteReverso = acum.tramite || null;
     detenerCamaraModal();
-    if (domicilioPreview && mejorCanvas) { domicilioPreview.src = mejorCanvas.toDataURL('image/jpeg', 0.7); domicilioPreview.hidden = false; }
+    if (domicilioPreview && mejorCanvas) { domicilioPreview.src = fotoEnderezada(mejorCanvas).toDataURL('image/jpeg', 0.92); domicilioPreview.hidden = false; }
     if (domicilioVideo) domicilioVideo.hidden = true;
     if (domInputDomicilio) domInputDomicilio.value = acum.domicilio || '';
     if (domInputNacimiento) domInputNacimiento.value = acum.lugarNacimiento || '';
@@ -1527,7 +1542,7 @@
       }
     } catch (e) { foto = frame; }
     if (flashEncendido && trackActual) { trackActual.applyConstraints({ advanced: [{ torch: false }] }).catch(() => {}); flashEncendido = false; autoFlashActivo = false; if (btnFlash) btnFlash.classList.remove('encendido'); }
-    ultimaFotoDataUrl = foto.toDataURL('image/jpeg', 0.92);
+    ultimaFotoDataUrl = fotoEnderezada(foto).toDataURL('image/jpeg', 0.92); ultimaFotoCompletaUrl = null;
     if (img) { img.src = ultimaFotoDataUrl; img.hidden = false; } if (video) video.hidden = true;
     if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
     trackActual = null; if (zoomControl) zoomControl.hidden = true;
@@ -1614,8 +1629,8 @@
       trackActual.applyConstraints({ advanced: [{ torch: false }] }).catch(() => {});
       flashEncendido = false; autoFlashActivo = false; if (btnFlash) btnFlash.classList.remove('encendido');
     }
-    const dataUrl = frame.toDataURL('image/jpeg', 0.92);
-    ultimaFotoDataUrl = dataUrl;
+    const dataUrl = fotoEnderezada(frame).toDataURL('image/jpeg', 0.92);
+    ultimaFotoDataUrl = dataUrl; ultimaFotoCompletaUrl = null;
     if (img) { img.src = dataUrl; img.hidden = false; } if (video) video.hidden = true;
     if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
     trackActual = null; if (zoomControl) zoomControl.hidden = true;
@@ -1869,7 +1884,8 @@
     }
     if (auto) { detenerDeteccionDNINuevo(); if (stopScan) { stopScan(); stopScan = null; } }
     setEstadoMarco('ok'); animarCaptura();
-    ultimaFotoDataUrl = canvasF.toDataURL('image/jpeg', 0.92);
+    ultimaFotoCompletaUrl = canvasF.toDataURL('image/jpeg', 0.92);
+    ultimaFotoDataUrl = fotoEnderezada(canvasF).toDataURL('image/jpeg', 0.92);
     if (img) { img.src = ultimaFotoDataUrl; img.hidden = false; } if (video) video.hidden = true;
     if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; } trackActual = null; if (zoomControl) zoomControl.hidden = true;
     if (scanFrame) scanFrame.classList.remove('activo');
@@ -1907,7 +1923,7 @@
     const previo = escaneoEstado ? escaneoEstado.textContent : '';
     try {
       if (escaneoEstado) escaneoEstado.textContent = '🔍 Completando datos con el frente…';
-      const textos = await DomicilioOCR.leerFrente(ultimaFotoDataUrl, null, (t) => FrenteDNI.completo(FrenteDNI.parsearVarios(t)));
+      const textos = await DomicilioOCR.leerFrente(ultimaFotoCompletaUrl || ultimaFotoDataUrl, null, (t) => FrenteDNI.completo(FrenteDNI.parsearVarios(t)));
       const r = FrenteDNI.parsearVarios(textos);
       if (!r || ultimoResultado !== d) return;
       if (r.dni && d.dni && r.dni !== d.dni && FrenteDNI.similitud(r.dni, d.dni) < 0.75) return;   // no es el mismo documento
