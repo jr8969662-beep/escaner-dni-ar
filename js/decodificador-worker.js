@@ -90,14 +90,25 @@ function leerQR(rgba, lum, w, h) {
 
 // ¿Se pueden recibir cuadros como ImageBitmap? (así la hoja principal no copia ni lee píxeles: se hace acá)
 const soportaBitmap = typeof OffscreenCanvas !== 'undefined' && typeof createImageBitmap === 'function';
+const soportaFrame = soportaBitmap && typeof VideoFrame !== 'undefined';
 
 self.onmessage = (ev) => {
   let { id, w, h, buf, tipos, mejorar } = ev.data || {};
-  if (ev.data && ev.data.ping) { self.postMessage({ id, pong: true, listo, errorCarga, bitmap: soportaBitmap }); return; }
+  if (ev.data && ev.data.ping) { self.postMessage({ id, pong: true, listo, errorCarga, bitmap: soportaBitmap, frame: soportaFrame }); return; }
   let res = null;
   try {
     // cuadro llegado como ImageBitmap (recortado y achicado por el navegador): se pasa a píxeles en este hilo
-    if (ev.data && ev.data.bmp) {
+    // cuadro llegado entero como VideoFrame (sin copiar nada en la hoja principal): se recorta y achica acá
+    if (ev.data && ev.data.frame) {
+      const fr = ev.data.frame, rg = ev.data.region;
+      try {
+        w = Math.round(rg.w); h = Math.round(rg.h);
+        const oc = new OffscreenCanvas(w, h), cx = oc.getContext('2d', { willReadFrequently: true });
+        cx.imageSmoothingQuality = 'medium';
+        cx.drawImage(fr, Math.round(rg.sx), Math.round(rg.sy), Math.round(rg.sw), Math.round(rg.sh), 0, 0, w, h);
+        buf = cx.getImageData(0, 0, w, h).data.buffer;
+      } finally { try { fr.close(); } catch (e) { /* nada */ } }
+    } else if (ev.data && ev.data.bmp) {
       const bmp = ev.data.bmp;
       w = bmp.width; h = bmp.height;
       const oc = new OffscreenCanvas(w, h), cx = oc.getContext('2d', { willReadFrequently: true });

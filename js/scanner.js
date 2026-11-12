@@ -103,7 +103,7 @@ const DNIScanner = (() => {
       if (variante !== 3) { const off = Math.round(rh * 0.45); sy = ry + off; sh = rh - off; }
     }
     const k = escala * esc;
-    const r = await lectorHilo.leerRegion(video, { sx: rx, sy, sw: rw, sh, w: rw * k, h: sh * k }, ['pdf417', 'qr']);
+    const r = await lectorHilo.leerRegion(video, { sx: rx, sy, sw: rw, sh, w: rw * k, h: sh * k }, ['pdf417', 'qr'], 6000, false);   // en vivo sin el realce del QR (es lo más lento y acá no hace falta)
     if (r && r.texto && !esURLInvalida(r.texto)) return r.texto;
     return null;
   }
@@ -161,6 +161,42 @@ const DNIScanner = (() => {
     return null;
   }
 
+  // Foto más nítida: al leer el código se miran unos pocos cuadros seguidos de la cámara y se queda el más definido
+  // (el que tiene bordes más marcados en la zona del documento). Tarda ~150 ms y solo pasa una vez, al detectar.
+  let cvNitidez = null;
+  function nitidezCuadro(fuente) {
+    if (!cvNitidez) { cvNitidez = document.createElement('canvas'); cvNitidez.width = 320; cvNitidez.height = 180; }
+    const sw = fuente.width || fuente.videoWidth, sh = fuente.height || fuente.videoHeight;
+    const cx = cvNitidez.getContext('2d', { willReadFrequently: true });
+    cx.drawImage(fuente, sw * 0.2, sh * 0.2, sw * 0.6, sh * 0.6, 0, 0, 320, 180);
+    const d = cx.getImageData(0, 0, 320, 180).data;
+    let suma = 0;
+    for (let y = 1; y < 179; y += 2) for (let x = 1; x < 319; x += 2) {
+      const i = (y * 320 + x) * 4;   // canal verde: diferencia con el vecino de la derecha/izquierda y de abajo/arriba
+      const gx = d[i + 5] - d[i - 3], gy = d[i + 1281] - d[i - 1279];
+      suma += gx * gx + gy * gy;
+    }
+    return suma;
+  }
+  async function cuadroMasNitido(video, canvas, anchoMax) {
+    const esc = Math.min(1, anchoMax / video.videoWidth);
+    const w = Math.round(video.videoWidth * esc), h = Math.round(video.videoHeight * esc);
+    canvas.width = w; canvas.height = h;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(video, 0, 0, w, h);
+    let mejor = -1;
+    try { mejor = nitidezCuadro(canvas); } catch (e) { return; }
+    const tmp = document.createElement('canvas'); tmp.width = w; tmp.height = h;
+    const tctx = tmp.getContext('2d');
+    for (let n = 0; n < 3; n++) {
+      await new Promise((r) => (video.requestVideoFrameCallback ? video.requestVideoFrameCallback(() => r()) : setTimeout(r, 40)));
+      if (!video.srcObject || video.readyState < 2) break;
+      tctx.drawImage(video, 0, 0, w, h);
+      const v = nitidezCuadro(tmp);
+      if (v > mejor) { mejor = v; ctx.drawImage(tmp, 0, 0); }
+    }
+  }
+
   function escanearContinuo(video, canvas, onDetected, onTimeout, opciones = {}) {
     const intervaloMs = opciones.intervaloMs || 300;
     const timeoutMs = opciones.timeoutMs || 20000;
@@ -169,23 +205,27 @@ const DNIScanner = (() => {
     const onBrillo = opciones.onBrillo;
     const framesConfirmacion = opciones.framesConfirmacion || 2;
     
-    let activo = true, intentos = 0, ultimoTextoDetectado = null, framesConfirmados = 0;
+    let activo = true, intentos = 0, ultimoTextoDetectado = null, framesConfirmados = 0, ultimoBrillo = 0;
+    // con el lector en el hilo aparte la página no hace trabajo pesado: se puede mirar la cámara más seguido sin trabar nada
+    // (si el lector todavía está ocupado con el cuadro anterior, la vuelta no hace nada)
+    const esperaHilo = Math.min(intervaloMs, opciones.intervaloHiloMs || 100);
     const timer = setTimeout(() => { if (activo) { activo = false; if (onTimeout) onTimeout(); } }, timeoutMs);
 
     async function loop() {
       if (!activo) return;
       try {
         if (video.srcObject && video.readyState >= 2 && video.videoWidth && usaBitmap()) {
-          if (intentos % 3 === 0 && onBrillo) { try { onBrillo(medirBrilloVideo(video)); } catch (e) {} }
+          const ahora = performance.now();
+          if (onBrillo && ahora - ultimoBrillo > 1000) { ultimoBrillo = ahora; try { onBrillo(medirBrilloVideo(video)); } catch (e) {} }
           const texto = await escanearVideoEnHilo(video, anchoMax);
           if (texto && activo) {
             if (texto === ultimoTextoDetectado) framesConfirmados++; else { ultimoTextoDetectado = texto; framesConfirmados = 1; }
             if (framesConfirmados >= framesConfirmacion) {
               // el resto de la app usa este canvas como foto del documento: se dibuja el cuadro (una sola vez, al detectar)
-              const esc1 = Math.min(1, anchoMax / video.videoWidth);
-              canvas.width = Math.round(video.videoWidth * esc1); canvas.height = Math.round(video.videoHeight * esc1);
-              canvas.getContext('2d', { willReadFrequently: true }).drawImage(video, 0, 0, canvas.width, canvas.height);
-              activo = false; clearTimeout(timer); onDetected(texto); return;
+              activo = false; clearTimeout(timer);
+              try { await cuadroMasNitido(video, canvas, anchoMax); }
+              catch (e) { const esc1 = Math.min(1, anchoMax / video.videoWidth); canvas.width = Math.round(video.videoWidth * esc1); canvas.height = Math.round(video.videoHeight * esc1); canvas.getContext('2d', { willReadFrequently: true }).drawImage(video, 0, 0, canvas.width, canvas.height); }
+              onDetected(texto); return;
             }
           } else { ultimoTextoDetectado = null; framesConfirmados = 0; }
           intentos++;
@@ -218,7 +258,7 @@ const DNIScanner = (() => {
           intentos++;
         }
       } catch (e) {}
-      if (activo) setTimeout(() => requestAnimationFrame(loop), intervaloMs);
+      if (activo) setTimeout(() => requestAnimationFrame(loop), usaBitmap() ? esperaHilo : intervaloMs);
     }
     loop();
     return () => { activo = false; clearTimeout(timer); };

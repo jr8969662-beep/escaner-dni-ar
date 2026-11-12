@@ -396,7 +396,7 @@
     if (stopScan) { stopScan(); stopScan = null; } if (cameraHint) cameraHint.style.opacity = '0'; setEstadoMarco('ok'); animarCaptura();
     if (flashEncendido && trackActual) { trackActual.applyConstraints({ advanced: [{ torch: false }] }).catch(() => {}); flashEncendido = false; autoFlashActivo = false; if (btnFlash) btnFlash.classList.remove('encendido'); }
     
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.8); 
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.92); 
     ultimaFotoDataUrl = dataUrl;
     
     if (img) { img.src = dataUrl; img.hidden = false; } video.hidden = true;
@@ -1527,7 +1527,7 @@
       }
     } catch (e) { foto = frame; }
     if (flashEncendido && trackActual) { trackActual.applyConstraints({ advanced: [{ torch: false }] }).catch(() => {}); flashEncendido = false; autoFlashActivo = false; if (btnFlash) btnFlash.classList.remove('encendido'); }
-    ultimaFotoDataUrl = foto.toDataURL('image/jpeg', 0.8);
+    ultimaFotoDataUrl = foto.toDataURL('image/jpeg', 0.92);
     if (img) { img.src = ultimaFotoDataUrl; img.hidden = false; } if (video) video.hidden = true;
     if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
     trackActual = null; if (zoomControl) zoomControl.hidden = true;
@@ -1614,7 +1614,7 @@
       trackActual.applyConstraints({ advanced: [{ torch: false }] }).catch(() => {});
       flashEncendido = false; autoFlashActivo = false; if (btnFlash) btnFlash.classList.remove('encendido');
     }
-    const dataUrl = frame.toDataURL('image/jpeg', 0.8);
+    const dataUrl = frame.toDataURL('image/jpeg', 0.92);
     ultimaFotoDataUrl = dataUrl;
     if (img) { img.src = dataUrl; img.hidden = false; } if (video) video.hidden = true;
     if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
@@ -1869,7 +1869,7 @@
     }
     if (auto) { detenerDeteccionDNINuevo(); if (stopScan) { stopScan(); stopScan = null; } }
     setEstadoMarco('ok'); animarCaptura();
-    ultimaFotoDataUrl = canvasF.toDataURL('image/jpeg', 0.8);
+    ultimaFotoDataUrl = canvasF.toDataURL('image/jpeg', 0.92);
     if (img) { img.src = ultimaFotoDataUrl; img.hidden = false; } if (video) video.hidden = true;
     if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; } trackActual = null; if (zoomControl) zoomControl.hidden = true;
     if (scanFrame) scanFrame.classList.remove('activo');

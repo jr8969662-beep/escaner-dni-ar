@@ -10,14 +10,14 @@ const Decodificador = (() => {
   const RUTA = 'js/decodificador-worker.js';
 
   function crear() {
-    let w = null, ok = false, seq = 0, bitmapOk = false;
+    let w = null, ok = false, seq = 0, bitmapOk = false, frameOk = false;
     const pend = new Map();
     try {
       w = new Worker(RUTA);
       ok = true;
       w.onmessage = (e) => {
         const d = e.data || {};
-        if (d.pong) { if (!d.listo) apagar(); else bitmapOk = !!d.bitmap && typeof createImageBitmap === 'function'; return; }
+        if (d.pong) { if (!d.listo) apagar(); else { bitmapOk = !!d.bitmap && typeof createImageBitmap === 'function'; frameOk = bitmapOk && !!d.frame && typeof VideoFrame !== 'undefined'; } return; }
         const fn = pend.get(d.id);
         if (fn) { pend.delete(d.id); fn(d); }
       };
@@ -51,6 +51,21 @@ const Decodificador = (() => {
     // (ImageBitmap) y el hilo aparte lo convierte a píxeles. region = { sx, sy, sw, sh, w, h } (píxeles de la fuente y tamaño de salida).
     async function leerRegion(fuente, region, tipos, timeoutMs = 6000, mejorar = true) {
       if (!ok || !bitmapOk || !fuente) return null;
+      // De la cámara: se pasa el cuadro tal cual (VideoFrame, sin copia) y el hilo aparte lo recorta y achica.
+      // Así la hoja principal casi no trabaja y la imagen de la cámara no se traba.
+      if (frameOk && typeof HTMLVideoElement !== 'undefined' && fuente instanceof HTMLVideoElement) {
+        let fr = null;
+        try { fr = new VideoFrame(fuente); } catch (e) { fr = null; }
+        if (fr) {
+          const id = ++seq;
+          return new Promise((res) => {
+            const t = setTimeout(() => { if (pend.has(id)) { pend.delete(id); res(null); } }, timeoutMs);
+            pend.set(id, (d) => { clearTimeout(t); res(d && d.texto ? d : null); });
+            try { w.postMessage({ id, frame: fr, region, tipos, mejorar }, [fr]); }
+            catch (e) { pend.delete(id); clearTimeout(t); try { fr.close(); } catch (e2) {} res(null); }
+          });
+        }
+      }
       let bmp;
       try {
         bmp = await createImageBitmap(fuente, Math.round(region.sx), Math.round(region.sy), Math.round(region.sw), Math.round(region.sh),
