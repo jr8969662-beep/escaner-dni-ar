@@ -1472,7 +1472,7 @@
           rawR += `\n===== intento ${intento} =====\n` + (r.raw || '');
           if (r.domicilio) { candDom.push(r.domicilio); porCuadroDom.set(r.domicilio, c); if (r.limpio) domLimpio = true; }
           if (r.lugarNacimiento) candLug.push(r.lugarNacimiento);
-          acumR.domicilio = consenso(candDom); acumR.lugarNacimiento = consenso(candLug);
+          acumR.domicilio = consenso(candDom); acumR.lugarNacimiento = DomicilioOCR.mejorLugar ? DomicilioOCR.mejorLugar(candLug) : consenso(candLug);
           if (acumR.domicilio && porCuadroDom.has(acumR.domicilio)) mejorR = porCuadroDom.get(acumR.domicilio);
           if (!acumR.cuil && r.cuil) acumR.cuil = r.cuil;
           if (r.identidad && r.identidad.dni === String(dniFrente).replace(/\D/g, '') && (!identR || (r.identidad.verificada && !identR.verificada))) identR = r.identidad;

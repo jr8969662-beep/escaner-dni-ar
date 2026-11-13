@@ -346,6 +346,12 @@ const FrenteDNI = (() => {
       }
       let mv = null, mn = 0;
       c.forEach((n, v) => { if (n > mn || (n === mn && String(v).length > String(mv).length)) { mn = n; mv = v; } });
+      // v57: el ejemplar y el trámite solo se aceptan si al menos DOS lecturas distintas dicen lo mismo
+      // (una letra o un número leído una sola vez puede ser ruido: mejor vacío —y que lo complete el QR— que mal)
+      if ((k === 'ejemplar' || k === 'tramite') && mv) {
+        const veces = rs.filter((r) => r[k] === mv).length + (deZona[k] || []).filter((v) => v === mv).length;
+        if (veces < 2) mv = null;
+      }
       out[k] = mv;
     });
     out.apellido = elegirNombre(rs.map((r) => r.apellido).filter(Boolean).concat(extra.apellido.map(comoNombre).filter(Boolean)));

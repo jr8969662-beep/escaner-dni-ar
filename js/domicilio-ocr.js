@@ -1598,6 +1598,20 @@ const DomicilioOCR = (() => {
     return prev[n];
   }
 
+  // Lugar de nacimiento entre varias lecturas: si una es la otra con palabras perdidas ("SAN JUJUY" / "SAN SALVADOR
+  // DE JUJUY"), vale la más completa; con 3 o más, consenso; si no, la de mejor puntaje.
+  function mejorLugar(cands) {
+    const c = [...new Set(cands.filter(Boolean))];
+    if (!c.length) return null;
+    if (c.length === 1) return c[0];
+    const toks = (x) => x.toUpperCase().replace(/[^A-Z0-9ÁÉÍÓÚÑ ]/g, ' ').split(/\s+/).filter(Boolean);
+    const contiene = (largo, corto) => { const L = toks(largo), C = toks(corto); let i = 0; for (const t of L) if (i < C.length && t === C[i]) i++; return i === C.length && L.length > C.length; };
+    const amplia = c.find((x) => c.every((y) => y === x || contiene(x, y)));
+    if (amplia) return amplia;
+    if (c.length >= 3) { const cs = consensoTexto(cands.filter(Boolean)); if (cs) return cs; }
+    return c.sort((a, b) => puntajeDireccion(b) - puntajeDireccion(a))[0];
+  }
+
   function mejorDomicilio(cands) {
     const c = [...new Set(cands.filter(Boolean).map((v) => sinFlechas(arreglarProvincias(arreglarSimbolos(v), true))).filter((v) => v && v.length >= 6))];
     if (!c.length) return null;
@@ -1674,7 +1688,7 @@ const DomicilioOCR = (() => {
     const sx = String(contexto.sexo || '');
     const ctx = { dni: dni || null, sexo: /^F/i.test(sx) ? 'F' : /^M/i.test(sx) ? 'M' : null };
     let raw = '', rel = null, cuil = null, lugar = null, via = 'tesseract';
-    const cands = [];
+    const cands = [], candLugar = [];
     const fin = () => {
       // (tal como está impreso en el DNI: "Bº", con el ordinal, no el signo de grados)
       const domicilio = (mejorDomicilio(cands) || '').replace(/\b([BN])°/g, '$1º') || null; log('🏠 candidatos: ' + JSON.stringify(cands));
@@ -1750,7 +1764,7 @@ const DomicilioOCR = (() => {
       const zonas = async (intento, desde, hasta) => leerReversoRapido(base, { dni: ctx.dni, sexo: ctx.sexo, marcoRel: rel, conMRZ: false, intento }, (p) => prog(desde + p * (hasta - desde)));
       const r = await zonas(1, 0.25, 0.6);
       raw += r.raw || '';
-      cands.push(r.domicilio); cuil = cuil || r.cuil; lugar = r.lugarNacimiento;
+      cands.push(r.domicilio); cuil = cuil || r.cuil; lugar = r.lugarNacimiento; if (lugar) candLugar.push(lugar);
       // franja del domicilio "solo tinta": la letra que cae sobre el mapa de Argentina ("PABLO II") y los dibujos del fondo
       progresoCb = (p) => prog(0.6 + p * 0.2); etapa(0, 1);
       // (con dos umbrales: uno estricto, que saca bien el mapa, y otro más suave, que no come letra fina o borrosa)
@@ -1774,10 +1788,11 @@ const DomicilioOCR = (() => {
       // (v57: precisión antes que velocidad: con una lectura más, el consenso palabra por palabra corrige los errores sueltos)
       const nD = (x) => String(x || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
       const coinciden = () => { const l = cands.filter(Boolean).map((x) => nD(arreglarProvincias(arreglarSimbolos(x), true))).filter((x) => x.length >= 6); return l.some((x, i) => l.indexOf(x) !== i); };
-      if (!mejorDomicilio(cands) || !cuil || !coinciden()) {
+      if (!mejorDomicilio(cands) || !cuil || !coinciden() || !lugar) {
         const r2 = await zonas(2, 0.8, 0.98);
         raw += r2.raw || '';
-        cands.push(r2.domicilio); cuil = cuil || r2.cuil; lugar = lugar || r2.lugarNacimiento;
+        cands.push(r2.domicilio); cuil = cuil || r2.cuil; if (r2.lugarNacimiento) candLugar.push(r2.lugarNacimiento);
+        lugar = mejorLugar(candLugar);
       }
       if (mejorDomicilio(cands) || cuil) return fin();
     }
@@ -2041,7 +2056,7 @@ const DomicilioOCR = (() => {
 
   return {
     leer: (...a) => enCola(() => leer(...a)),
-    consensoTexto,
+    consensoTexto, mejorLugar,
     leerReversoRapido: (...a) => enCola(() => leerReversoRapido(...a)),
     leerReversoFoto: (...a) => enCola(() => leerReversoFoto(...a)),
     calcularCUIL,
