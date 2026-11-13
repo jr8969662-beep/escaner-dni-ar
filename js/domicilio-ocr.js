@@ -570,19 +570,33 @@ const DomicilioOCR = (() => {
     if (!eEj2 && pArg2 && !cancelado()) {
       const h = Math.max(8, pArg2.b.y1 - pArg2.b.y0);
       const x0 = Math.min(gris.width - 4, pArg2.b.x1 + 0.6 * h), x1 = Math.min(gris.width, pArg2.b.x1 + 14 * h);
-      const y0 = Math.max(0, pArg2.b.y0 - 0.4 * h), y1 = Math.min(gris.height, pArg2.b.y1 + 0.4 * h);
+      // (alto generoso: la letra a veces queda un poco más abajo que ARGENTINA, y arriba está la etiqueta "Ejemplar")
+      const y0 = Math.max(0, pArg2.b.y0 - 0.5 * h), y1 = Math.min(gris.height, pArg2.b.y1 + 1.6 * h);
       if (x1 - x0 > 2 * h) {
-        await w.setParameters({ tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', preserve_interword_spaces: '0', tessedit_pageseg_mode: '7' });
+        await w.setParameters({ tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz', preserve_interword_spaces: '0', tessedit_pageseg_mode: '6' });
         const esc = Math.max(1, Math.min(4, 48 / h));
         for (const base of [gris, grisF]) {
           const z = document.createElement('canvas'), pad = 14;
           z.width = Math.round((x1 - x0) * esc) + 2 * pad; z.height = Math.round((y1 - y0) * esc) + 2 * pad;
           const zc = z.getContext('2d'); zc.fillStyle = '#fff'; zc.fillRect(0, 0, z.width, z.height); zc.imageSmoothingQuality = 'high';
           zc.drawImage(base, x0, y0, x1 - x0, y1 - y0, pad, pad, z.width - 2 * pad, z.height - 2 * pad);
+          try { if (window.__zonas) window.__zonas.push({ k: 'ejarg', url: z.toDataURL('image/png') }); } catch (e) { /* nada */ }
           const t = String((await w.recognize(z)).data.text || '').trim();
-          const m = /^([A-Z])\1?$/.exec(t.replace(/\s+/g, ''));
-          if (m) textos.zonas.ejemplar.push(m[1]);
+          // una MAYÚSCULA sola en su renglón (o al final, después de "Ejemplar"); las minúsculas son la etiqueta
+          const letras = [];
+          t.split(/\n/).map((x) => x.trim()).filter(Boolean).forEach((x) => { const tk = x.split(/\s+/), u = tk[tk.length - 1], mm = /^([A-Z])\1?$/.exec(u);
+            if (mm && (tk.length === 1 || /jempl|EJEMPL/i.test(x))) letras.push(mm[1]); });
+          if (new Set(letras).size === 1) textos.zonas.ejemplar.push(letras[0]);
           log('📄 ejemplar junto a ARGENTINA (solo letras): ' + t);
+          // y la mancha negra con forma de letra, sola, como un carácter suelto (psm 10)
+          const ml = manchaDeLetra(z, h * esc);
+          if (ml) {
+            await w.setParameters({ tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', preserve_interword_spaces: '0', tessedit_pageseg_mode: '10' });
+            const t1 = String((await w.recognize(ml)).data.text || '').replace(/\s+/g, '');
+            if (/^[A-Z]$/.test(t1)) textos.zonas.ejemplar.push(t1);
+            log('📄 ejemplar (letra negra sola): ' + t1);
+            await w.setParameters({ tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz', preserve_interword_spaces: '0', tessedit_pageseg_mode: '6' });
+          }
         }
         await setPsm('6');
       }
@@ -1603,6 +1617,34 @@ const DomicilioOCR = (() => {
   const sinFlechas = (v) => String(v).replace(/\s*[<>«»]+\s*/g, ' - ').replace(/(\s-)+\s/g, ' - ').replace(/\s+/g, ' ').replace(/[\s\-]+$/, '').trim();
   // Entre todas las lecturas, la más completa y limpia: palabras de dirección reales suman, basura resta, y suma
   // si otra lectura dice casi lo mismo. A igual puntaje, la más larga (la que no cortó "PABLO II" ni el 2.º renglón).
+  // v57: dentro de un recorte, la mancha de tinta NEGRA del tamaño de una letra (el ejemplar se imprime en negro;
+  // las líneas de seguridad y las etiquetas son grises). Devuelve un recorte chico de esa letra, o null.
+  function manchaDeLetra(c, h) {
+    const W = c.width, H = c.height, d = c.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, W, H).data;
+    const g = new Uint8Array(W * H); const hist = new Uint32Array(256);
+    for (let i = 0, j = 0; i < g.length; i++, j += 4) { const v = (d[j] * 0.3 + d[j + 1] * 0.59 + d[j + 2] * 0.11) | 0; g[i] = v; hist[v]++; }
+    // umbral: lo más oscuro de la imagen (el 4 % más oscuro, y como mucho 110)
+    let acc = 0, um = 0; for (let v = 0; v < 256; v++) { acc += hist[v]; if (acc >= g.length * 0.04) { um = v; break; } }
+    um = Math.min(110, um + 12);
+    const vis = new Uint8Array(W * H), comps = [];
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const i0 = y * W + x; if (vis[i0] || g[i0] > um) continue;
+      let x0 = x, x1 = x, y0 = y, y1 = y, n = 0, suma = 0; const pila = [i0]; vis[i0] = 1;
+      while (pila.length) { const i = pila.pop(), px = i % W, py = (i / W) | 0; n++; suma += g[i];
+        if (px < x0) x0 = px; if (px > x1) x1 = px; if (py < y0) y0 = py; if (py > y1) y1 = py;
+        for (const k of [i - 1, i + 1, i - W, i + W]) if (k >= 0 && k < g.length && !vis[k] && g[k] <= um && Math.abs((k % W) - px) <= 1) { vis[k] = 1; pila.push(k); } }
+      comps.push({ x0, x1, y0, y1, n, osc: suma / n });
+    }
+    const ok = comps.filter((q) => { const ah = q.y1 - q.y0 + 1, aw = q.x1 - q.x0 + 1; return ah >= 0.45 * h && ah <= 2.2 * h && aw >= 0.2 * h && aw <= 1.8 * h && q.n >= 0.08 * ah * aw; });
+    if (!ok.length) return null;
+    const q = ok.sort((a, b) => a.osc - b.osc || b.n - a.n)[0];
+    const pad = Math.round(0.35 * (q.y1 - q.y0 + 1)), k = Math.max(1, 64 / (q.y1 - q.y0 + 1));
+    const o = document.createElement('canvas'); o.width = Math.round((q.x1 - q.x0 + 1 + 2 * pad) * k); o.height = Math.round((q.y1 - q.y0 + 1 + 2 * pad) * k);
+    const oc = o.getContext('2d'); oc.fillStyle = '#fff'; oc.fillRect(0, 0, o.width, o.height); oc.imageSmoothingQuality = 'high';
+    oc.drawImage(c, q.x0 - pad, q.y0 - pad, q.x1 - q.x0 + 1 + 2 * pad, q.y1 - q.y0 + 1 + 2 * pad, 0, 0, o.width, o.height);
+    return o;
+  }
+
   // v57: CONSENSO entre varias lecturas de un mismo renglón (domicilio, lugar): se toma la lectura que más se parece
   // a las demás y, palabra por palabra, se corrige con lo que dice la mayoría (alineando las palabras). Así un error
   // que aparece en una sola lectura ("950" por "PISO", un "B°" perdido) se corrige con las otras.
