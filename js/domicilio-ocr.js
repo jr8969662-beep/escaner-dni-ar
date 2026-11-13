@@ -1770,8 +1770,11 @@ const DomicilioOCR = (() => {
         cands.push(...candidatosDom(tT, true));
       }
       await w.setParameters(PARAMS_TEXTO);
-      // faltó algo: la misma foto, con las franjas más ampliadas (sin sacar otra foto)
-      if (!mejorDomicilio(cands) || !cuil) {
+      // faltó algo, o las lecturas del domicilio no coinciden entre sí: la misma foto, con las franjas más ampliadas
+      // (v57: precisión antes que velocidad: con una lectura más, el consenso palabra por palabra corrige los errores sueltos)
+      const nD = (x) => String(x || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+      const coinciden = () => { const l = cands.filter(Boolean).map((x) => nD(arreglarProvincias(arreglarSimbolos(x), true))).filter((x) => x.length >= 6); return l.some((x, i) => l.indexOf(x) !== i); };
+      if (!mejorDomicilio(cands) || !cuil || !coinciden()) {
         const r2 = await zonas(2, 0.8, 0.98);
         raw += r2.raw || '';
         cands.push(r2.domicilio); cuil = cuil || r2.cuil; lugar = lugar || r2.lugarNacimiento;
