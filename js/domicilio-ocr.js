@@ -1588,6 +1588,10 @@ const DomicilioOCR = (() => {
     const sim = (a, b) => { const A = a.toUpperCase(), B = b.toUpperCase(); return A === B ? 1 : (1 - lev(A, B) / Math.max(A.length, B.length)); };
     const base = c.map((v) => ({ v, p: c.reduce((t, o) => t + sim(v, o), 0) })).sort((x, y) => y.p - x.p)[0].v;
     const B = base.split(' ');
+    // fuera las lecturas que son solo un pedacito (menos de la mitad de las palabras de la base): no sirven para votar
+    const c2 = c.filter((o) => o === base || o.split(' ').length >= B.length * 0.35);
+    if (c2.length < 3) return null;
+    c.length = 0; c.push(...c2);
     const votos = B.map((t) => new Map([[t, 1]]));   // para cada palabra de la base: qué dicen las otras lecturas
     const inserciones = new Map();                     // palabras que la base no tiene: "pos|palabra" -> lecturas
     c.forEach((o) => {
@@ -1616,13 +1620,14 @@ const DomicilioOCR = (() => {
     const out = [];
     for (let i = 0; i <= B.length; i++) {
       // palabra que falta en la base pero está en la mayoría de las lecturas, en este lugar
-      inserciones.forEach((n, k) => { const [pos, w] = k.split('|'); if (+pos === i && n + 1 > mitad && !out.includes(w)) out.push(w); });
+      inserciones.forEach((n, k) => { const [pos, w] = k.split('|'); if (+pos === i && n > mitad && /[A-Z0-9ÁÉÍÓÚÑ°º]/i.test(w) && !out.includes(w)) out.push(w); });
       if (i === B.length) break;
       // (empate: queda la palabra de la lectura base, que es la que más coincide con todas)
       const mm = [...votos[i].entries()].sort((x, y) => y[1] - x[1] || (y[0] === B[i]) - (x[0] === B[i]) || puntajeDireccion(y[0]) - puntajeDireccion(x[0]));
       // palabra de la base que casi ninguna otra lectura tiene (ruido de una sola lectura): afuera
       const total = [...votos[i].values()].reduce((t, x) => t + x, 0);
       if (total === 1 && c.length >= 4) continue;
+      if (!/[A-Z0-9ÁÉÍÓÚÑ°º\-]/i.test(mm[0][0])) continue;   // rayas largas, comillas sueltas: ruido
       out.push(mm[0][0]);
     }
     return out.join(' ').replace(/\s+/g, ' ').trim();
