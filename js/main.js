@@ -122,7 +122,10 @@
     } catch (e) { return null; }
   }
   let ultimaFotoReversoUrl = null, dniDeLaFoto = null;   // v48: foto del reverso (para verla ampliada en la ficha)
-  let paisSeleccionado = localStorage.getItem(PAIS_KEY) || 'arg';
+  // v56: solo DNI argentino (viejo y nuevo). Los lectores de otros países siguen en el código, pero no se muestran.
+  const SOLO_ARGENTINA = true;
+  let paisSeleccionado = SOLO_ARGENTINA ? 'arg' : (localStorage.getItem(PAIS_KEY) || 'arg');
+  if (SOLO_ARGENTINA) { try { localStorage.setItem(PAIS_KEY, 'arg'); } catch (e) { /* nada */ } }
   // Tipo de DNI argentino elegido arriba de la cámara: 'viejo' (código de barras en el frente) o 'nuevo' (QR atrás).
   // Con el tipo sabido, la cámara busca solo lo que corresponde: más rápido y sin trabar la imagen.
   const TIPO_KEY = 'tipo_dni';
@@ -438,7 +441,7 @@
     
     if (paisDelDocumento && paisDelDocumento !== paisSeleccionado) {
       const nd = nombrePaisDesdeCodigo(paisDelDocumento); setEstadoMarco('error');
-      mostrarErrorDocumento('Documento incorrecto', `Elegiste <strong>${paisElegidoNombre}</strong> pero este documento parece ser de <strong>${nd}</strong>.<br><br>Cambiá el país en el selector de arriba y volvé a escanear.`);
+      mostrarErrorDocumento('Documento incorrecto', `${SOLO_ARGENTINA ? 'Este documento' : `Elegiste <strong>${paisElegidoNombre}</strong> pero este documento`} parece ser de <strong>${nd}</strong>.<br><br>${SOLO_ARGENTINA ? 'Esta app lee solo el DNI argentino (viejo o nuevo).' : 'Cambiá el país en el selector de arriba y volvé a escanear.'}`);
       if (estado) { estado.textContent = `⚠️ Este documento es de ${nd}`; estado.classList.add('error'); estado.classList.remove('ok'); }
       if (escaneoEstado) escaneoEstado.textContent = ''; setStatus('Documento incorrecto', 'error'); if (btnRepetir) btnRepetir.hidden = false;
       destacarChipPais(paisDelDocumento); reproducirSonidoError(); vibrarError(); return;

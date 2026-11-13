@@ -398,3 +398,6 @@ html, body { overflow-x: hidden; }
 
 /* v54: después de leer se ve el DNI entero (ya recortado y derecho), sin lo de afuera */
 .camera-viewport .camera-img, .domicilio-preview { object-fit: contain; background: #0b0f16; }
+
+/* v56: solo DNI argentino: el selector de países no se muestra (el código queda en el repositorio) */
+#country-selector { display: none !important; }
