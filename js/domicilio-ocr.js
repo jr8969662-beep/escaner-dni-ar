@@ -1731,6 +1731,10 @@ const DomicilioOCR = (() => {
     const ctx = { dni: dni || null, sexo: /^F/i.test(sx) ? 'F' : /^M/i.test(sx) ? 'M' : null };
     let raw = '', rel = null, cuil = null, lugar = null, via = 'tesseract';
     const cands = [], candLugar = [];
+    // lugar de nacimiento leído en cualquier pasada (tras su etiqueta): suma candidatos para elegir el más completo
+    const sumarLugar = (t) => { const v = lugarTrasEtiqueta(t); if (!v) return;
+      const x = arreglarProvincias(String(v).toUpperCase().split(' ').filter((w) => /[A-ZÁÉÍÓÚÑ0-9]/.test(w) && (!/^[A-ZÁÉÍÓÚÑ0-9]$/.test(w) || w === 'Y')).join(' ').replace(/^(?:Y\s+)+/, '').replace(/[\s,.\-]+$/, ''));
+      if (x && x.length >= 3 && !/DOMICILIO/.test(x)) candLugar.push(x); };
     const fin = () => {
       // (tal como está impreso en el DNI: "Bº", con el ordinal, no el signo de grados)
       const domicilio = (mejorDomicilio(cands) || '').replace(/\b([BN])°/g, '$1º') || null; log('🏠 candidatos: ' + JSON.stringify(cands));
@@ -1796,6 +1800,7 @@ const DomicilioOCR = (() => {
       if (!rel && contexto.marcoRel) rel = contexto.marcoRel;
       // ya que se leyó: el domicilio entero (no lo corta ninguna franja) y el CUIL
       cands.push(...candidatosDom(textoUbic, false));
+      sumarLugar(textoUbic);
       if (!cuil) cuil = elegirCUIL([textoUbic], Object.assign({}, ctx, { estricto: true })) || null;
     }
 
@@ -1819,7 +1824,7 @@ const DomicilioOCR = (() => {
       // luz despareja de un lado al otro de la foto
       { const tA = (await w.recognize(await franjaDomicilio(base, rel, 'fondo'))).data.text || '';
         raw += '\n--- franja domicilio (ajustada, luz normalizada) ---\n' + tA;
-        cands.push(...candidatosDom(tA, true)); }
+        cands.push(...candidatosDom(tA, true)); sumarLugar(tA); }
       for (const extra of (contexto.tipo === 'nuevo' && limpioR ? [] : [0, 10])) {
         const tT = (await w.recognize(soloTinta(fD, extra))).data.text || '';
         raw += '\n--- franja domicilio (solo tinta ' + (extra ? 'suave' : 'estricta') + ') ---\n' + tT;
@@ -1836,6 +1841,7 @@ const DomicilioOCR = (() => {
         cands.push(r2.domicilio); cuil = cuil || r2.cuil; if (r2.lugarNacimiento) candLugar.push(r2.lugarNacimiento);
         lugar = mejorLugar(candLugar);
       }
+      lugar = mejorLugar(candLugar) || lugar;
       if (mejorDomicilio(cands) || cuil) return fin();
     }
 
