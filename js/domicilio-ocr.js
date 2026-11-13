@@ -1417,7 +1417,7 @@ const DomicilioOCR = (() => {
     // franja de arriba (domicilio en 1-2 renglones + lugar de nacimiento), ampliada: letra de unos 30 px
     // (tamaño justo: letra de unos 24 px. Más grande no lee mejor y en el celular tarda el doble)
     // (si el 1.er intento no alcanzó, los siguientes más grandes: más lentos pero aguantan mejor una foto borrosa)
-    const extra = (contexto.intento || 1) > 1, AT = extra ? 2300 : 1800, AC = extra ? 1700 : 1300;
+    const extra = (contexto.intento || 1) > 1, AT = (contexto.intento || 1) >= 3 ? 2800 : extra ? 2300 : 1800, AC = extra ? 1700 : 1300;
     // (hasta el borde derecho: el 1.er renglón del domicilio llega casi al final de la tarjeta, arriba del QR)
     const BT = enderezada ? [-0.01, -0.02, 1.0, 0.30] : [-0.02, -0.07, 0.98, 0.33];
     const top = franja(BT[0], BT[1], BT[2], BT[3], Math.min(3, AT / (ancho * (BT[2] - BT[0]))), AT);
@@ -1869,6 +1869,13 @@ const DomicilioOCR = (() => {
         raw += r2.raw || '';
         cands.push(r2.domicilio); cuil = cuil || r2.cuil; if (r2.lugarNacimiento) candLugar.push(r2.lugarNacimiento);
         lugar = mejorLugar(candLugar);
+        // siguen sin coincidir dos lecturas: una más, todavía más ampliada (otra escala = errores distintos)
+        if (!coinciden()) {
+          const r3 = await zonas(3, 0.9, 0.99);
+          raw += r3.raw || '';
+          cands.push(r3.domicilio); cuil = cuil || r3.cuil; if (r3.lugarNacimiento) candLugar.push(r3.lugarNacimiento);
+          lugar = mejorLugar(candLugar);
+        }
       }
       lugar = mejorLugar(candLugar) || lugar;
       if (mejorDomicilio(cands) || cuil) return fin();
