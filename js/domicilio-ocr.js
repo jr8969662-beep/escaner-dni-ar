@@ -557,6 +557,29 @@ const DomicilioOCR = (() => {
       log('📄 zona ejemplar (renglón armado): ' + text);
     }
 
+    // 2c) v57: el número de trámite (11 cifras) se relee en el lugar exacto donde la pasada general vio un número largo,
+    //     con el OCR limitado a números y con dos tratamientos de imagen (aunque no se haya visto la etiqueta "Trámite")
+    if (!cancelado()) {
+      const largos = palabrasF.filter((p) => p.b && /^[\dOQDIl|]{9,13}$/.test(String(p.t).replace(/[^\dOQDIl|]/g, '')) && (String(p.t).match(/\d/g) || []).length >= 8);
+      if (largos.length) {
+        await w.setParameters({ tessedit_char_whitelist: '0123456789', preserve_interword_spaces: '0', tessedit_pageseg_mode: '7' });
+        for (const p of largos.slice(0, 2)) {
+          const h = Math.max(8, p.b.y1 - p.b.y0), x0 = Math.max(0, p.b.x0 - 0.8 * h), x1 = Math.min(gris.width, p.b.x1 + 0.8 * h);
+          const y0 = Math.max(0, p.b.y0 - 0.35 * h), y1 = Math.min(gris.height, p.b.y1 + 0.35 * h), esc = Math.max(1, Math.min(4, 48 / h));
+          for (const base of [gris, grisF]) {
+            const z = document.createElement('canvas'), pad = 14;
+            z.width = Math.round((x1 - x0) * esc) + 2 * pad; z.height = Math.round((y1 - y0) * esc) + 2 * pad;
+            const zc = z.getContext('2d'); zc.fillStyle = '#fff'; zc.fillRect(0, 0, z.width, z.height); zc.imageSmoothingQuality = 'high';
+            zc.drawImage(base, x0, y0, x1 - x0, y1 - y0, pad, pad, z.width - 2 * pad, z.height - 2 * pad);
+            const t = String((await w.recognize(z)).data.text || '').replace(/\s+/g, '');
+            const m = /(\d{11})/.exec(t); if (m) textos.zonas.tramite.push(m[1]);
+            log('📄 número largo (solo números): ' + t);
+          }
+        }
+        await setPsm('6');
+      }
+    }
+
     // 3) más pasadas de la imagen completa, solo mientras falte algo
     const extra = [[gris, '6', 'párrafo'], [grisF, '6', 'párrafo, luz normalizada'], [gris, '11', 'disperso']];
     for (let i = 0; i < extra.length && !listo() && !cancelado(); i++) {
