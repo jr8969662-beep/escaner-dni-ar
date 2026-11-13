@@ -527,7 +527,13 @@ const DomicilioOCR = (() => {
             const { data: { text: t3 } } = await w.recognize(recorte(base));
             const v = String(t3 || '').replace(/\s+/g, soloNum ? '' : ' ').trim();
             if (soloNum) { const m = /(\d{11})/.exec(v); if (m) destino.push(m[1]); }
-            else { const ls = v.split(/\n/).map((x) => x.trim()).filter(Boolean); const un = ls.filter((x) => /^[A-Z]$/.test(x)); if (un.length === 1) destino.push(un[0]); }
+            else {
+              // una letra sola en su renglón, o al final del renglón "ARGENTINA  C" (a veces sale doble: "CC")
+              const ls = v.split(/\n/).map((x) => x.trim()).filter(Boolean), letras = [];
+              ls.forEach((x) => { const tk = x.split(/\s+/), u = tk[tk.length - 1], m = /^([A-Z])\1?$/.exec(u);
+                if (m && (tk.length === 1 || /GENTIN|RGENT|ARGEN|NTINA/.test(x))) letras.push(m[1]); });
+              if (new Set(letras).size === 1) destino.push(letras[0]);
+            }
             log('📄 zona ' + e.k + ' (solo ' + (soloNum ? 'números' : 'letras') + '): ' + v);
           }
           await setPsm('7');
@@ -1576,7 +1582,9 @@ const DomicilioOCR = (() => {
   function consensoTexto(cands) {
     const c = cands.filter(Boolean).map((v) => String(v).replace(/\s+/g, ' ').trim()).filter((v) => v.length >= 3);
     if (c.length < 3) return null;
-    const simT = (a, b) => { if (a === b) return 1; const A = a.toUpperCase().replace(/[^A-Z0-9ÁÉÍÓÚÑ]/g, ''), B = b.toUpperCase().replace(/[^A-Z0-9ÁÉÍÓÚÑ]/g, ''); if (!A || !B) return A === B ? 0.9 : 0; return 1 - lev(A, B) / Math.max(A.length, B.length); };
+    // (para alinear, las letras que el OCR confunde cuentan como iguales: 8/B, 0/O/D, 1/I/L, 5/S, 2/Z, 6/G)
+    const canon = (x) => x.toUpperCase().replace(/[^A-Z0-9ÁÉÍÓÚÑ]/g, '').replace(/8/g, 'B').replace(/[0D]/g, 'O').replace(/[1L]/g, 'I').replace(/5/g, 'S').replace(/2/g, 'Z').replace(/6/g, 'G');
+    const simT = (a, b) => { if (a === b) return 1; const A = canon(a), B = canon(b); if (!A || !B) return A === B ? 0.9 : 0; return 1 - lev(A, B) / Math.max(A.length, B.length); };
     const sim = (a, b) => { const A = a.toUpperCase(), B = b.toUpperCase(); return A === B ? 1 : (1 - lev(A, B) / Math.max(A.length, B.length)); };
     const base = c.map((v) => ({ v, p: c.reduce((t, o) => t + sim(v, o), 0) })).sort((x, y) => y.p - x.p)[0].v;
     const B = base.split(' ');
@@ -1592,9 +1600,13 @@ const DomicilioOCR = (() => {
         const st = simT(B[i - 1], O[j - 1]);
         D[i][j] = Math.min(D[i - 1][j] + 1, D[i][j - 1] + 1, D[i - 1][j - 1] + (st >= 0.5 ? 1 - st : 1.6));
       }
+      // (si la otra lectura está CORTADA —le falta el final— el final de la base no cuesta: se alinea solo lo que tiene)
       let i = n, j = m;
+      for (let k = 0; k <= n; k++) if (D[k][m] < D[i][m] - 1e-4) i = k;
       while (i > 0 || j > 0) {
         if (i > 0 && j > 0) { const st = simT(B[i - 1], O[j - 1]); if (Math.abs(D[i][j] - (D[i - 1][j - 1] + (st >= 0.5 ? 1 - st : 1.6))) < 1e-4 && st >= 0.5) { const mm = votos[i - 1]; mm.set(O[j - 1], (mm.get(O[j - 1]) || 0) + 1); i--; j--; continue; } }
+        // (a igual costo, primero "falta esta palabra en la otra lectura": así una lectura cortada no desalinea el final)
+        if (i > 0 && Math.abs(D[i][j] - (D[i - 1][j] + 1)) < 1e-4) { i--; continue; }
         if (j > 0 && (i === 0 || Math.abs(D[i][j] - (D[i][j - 1] + 1)) < 1e-4)) { const k = i + '|' + O[j - 1]; inserciones.set(k, (inserciones.get(k) || 0) + 1); j--; continue; }
         if (i > 0 && j > 0 && Math.abs(D[i][j] - (D[i - 1][j - 1] + 1.6)) < 1e-4) { i--; j--; continue; }
         i--;
@@ -1606,7 +1618,8 @@ const DomicilioOCR = (() => {
       // palabra que falta en la base pero está en la mayoría de las lecturas, en este lugar
       inserciones.forEach((n, k) => { const [pos, w] = k.split('|'); if (+pos === i && n + 1 > mitad && !out.includes(w)) out.push(w); });
       if (i === B.length) break;
-      const mm = [...votos[i].entries()].sort((x, y) => y[1] - x[1] || puntajeDireccion(y[0]) - puntajeDireccion(x[0]));
+      // (empate: queda la palabra de la lectura base, que es la que más coincide con todas)
+      const mm = [...votos[i].entries()].sort((x, y) => y[1] - x[1] || (y[0] === B[i]) - (x[0] === B[i]) || puntajeDireccion(y[0]) - puntajeDireccion(x[0]));
       // palabra de la base que casi ninguna otra lectura tiene (ruido de una sola lectura): afuera
       const total = [...votos[i].values()].reduce((t, x) => t + x, 0);
       if (total === 1 && c.length >= 4) continue;
