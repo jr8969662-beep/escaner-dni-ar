@@ -93,7 +93,18 @@
   let ultimaFotoCompletaUrl = null;   // la foto entera (sin enderezar): la usa la lectura del texto del frente
   // Encuadre automático: deja el DNI derecho y recortado; si no encuentra los bordes con seguridad, queda la foto como está
   function fotoEnderezada(c, zona) {
-    try { if (typeof Encuadre === 'undefined' || !c) return c; const r = Encuadre.enderezar(c, zona); return r ? r.canvas : c; } catch (e) { return c; }
+    try {
+      if (!c) return c;
+      const r = typeof Encuadre !== 'undefined' ? Encuadre.enderezar(c, zona) : null;
+      if (r) return r.canvas;
+      // no encontró los bordes: por lo menos se queda solo lo que está dentro del recuadro (sin lo de afuera)
+      if (zona && zona.w > 50 && zona.h > 30) {
+        const o = document.createElement('canvas'); o.width = Math.round(zona.w); o.height = Math.round(zona.h);
+        o.getContext('2d').drawImage(c, zona.x, zona.y, zona.w, zona.h, 0, 0, o.width, o.height);
+        return o;
+      }
+      return c;
+    } catch (e) { return c; }
   }
   function zonaDelMarco(c) {   // dónde está el marco de escaneo, en píxeles de la foto c (sacada del video entero)
     try {
@@ -414,7 +425,7 @@
     ultimaFotoCompletaUrl = dataUrl;
     ultimaFotoDataUrl = fotoEnderezada(canvas, zonaDelMarco(canvas)).toDataURL('image/jpeg', 0.92);
     
-    if (img) { img.src = dataUrl; img.hidden = false; } video.hidden = true;
+    if (img) { img.src = ultimaFotoDataUrl; img.hidden = false; } video.hidden = true;
     if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; } trackActual = null; if (zoomControl) zoomControl.hidden = true;
     await new Promise(r => setTimeout(r, 250)); if (scanFrame) scanFrame.classList.remove('activo');
     const paisDelDocumento = detectarPaisDelTexto(texto); const paisElegidoNombre = nombrePaisDesdeCodigo(paisSeleccionado);

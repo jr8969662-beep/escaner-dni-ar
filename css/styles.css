@@ -395,3 +395,6 @@ html, body { overflow-x: hidden; }
 .nube-msg.error { background: rgba(220,60,50,.15); color: #e0645a; }
 .nube-ayuda summary { cursor: pointer; font-weight: 700; }
 .nube-ayuda ol { padding-left: 20px; line-height: 1.5; font-size: 15px; }
+
+/* v54: después de leer se ve el DNI entero (ya recortado y derecho), sin lo de afuera */
+.camera-viewport .camera-img, .domicilio-preview { object-fit: contain; background: #0b0f16; }

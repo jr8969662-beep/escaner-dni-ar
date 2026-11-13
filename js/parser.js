@@ -166,7 +166,9 @@ const DNIParser = (() => {
     const fechaEmision = fechaDMYtoISO(fechaEmisionDMY);
 
     return {
-      metodo: 'qr',
+      // (es el código de barras PDF417 del DNI tarjeta "viejo": TRÁMITE@APELLIDO@NOMBRE@SEXO@DNI@EJEMPLAR@...;
+      //  el QR del DNI nuevo lo lee parser-dni-nuevo.js)
+      metodo: 'pdf417',
       raw: contenido,
       dni: dni,
       apellido: apellido || null,
@@ -185,7 +187,7 @@ const DNIParser = (() => {
       cuil: cuil,
       tipoDocumento: 'DNI',
       pais: 'ARG',
-      esNuevoDNI: true,
+      esNuevoDNI: false,
       vigente: null
     };
   }
