@@ -925,7 +925,8 @@ const DomicilioOCR = (() => {
     s = s.replace(/(\d)\s?-\s?8\s(?=[A-Z]{3})/g, '$1 - B° ');                      // "7-8 JUAN" -> "7 - B° JUAN"
     s = s.replace(/(\d)\s?[.,]\s?8\s?(?:-\s?)?(?=[A-Z]{3})/g, '$1 - B° ');          // "245. 8 - SAN", "245. 8- SAN", "7. 8 JUAN"
     s = s.replace(/\s-\s?8\s(?=[A-Z]{2,}\s)/g, ' - B° ');
-    s = s.replace(/\s-\s?8\s?-\s(?=[A-Z]{3})/g, ' - B° ');                          // "DPTO B -8- TRES" (fin de renglón)                              // "DPTO B - 8 TRES", "455 -8 EL"
+    s = s.replace(/\s-\s?8\s?-\s(?=[A-Z]{3})/g, ' - B° ');
+    s = s.replace(/(\d)\s-\sB\s-\s(?=[A-Z]{3})/g, '$1 - B° ');                          // "CASA 7 - B - JUAN" (sin el °)                          // "DPTO B -8- TRES" (fin de renglón)                              // "DPTO B - 8 TRES", "455 -8 EL"
     s = s.replace(/\bB\s?[*º°'"´`:;”“’‘](?=\s|[A-Z])/g, 'B° ');                         // "B*", "Bº", "B:" -> "B°"
     s = s.replace(/(^|\s-\s)B\s(?=[A-Z]{3}|[A-Z]{2}\s)/g, '$1B° ');                // "- B JUAN", "- B EL TRIBUNO" -> "B°"
     s = s.replace(/\bB8[*°º"”']?(?=\s)/g, 'B°').replace(/(\d\s)8[*"”](?=\s[A-Z])/g, '$1B°');   // "B8*", "401 8” CIUDAD"
@@ -1724,6 +1725,25 @@ const DomicilioOCR = (() => {
     return c.sort((a, b) => puntajeDireccion(b) - puntajeDireccion(a))[0];
   }
 
+  // v57: si el renglón del lugar de nacimiento se coló al final del domicilio (etiqueta mal leída: "SALTA - SALTA
+  // ME ATENTA SAN SALVADOR DE JUJUY - JUJUY"), se corta: el domicilio termina en la provincia, antes del lugar
+  function sinLugarAlFinal(dom, lugar) {
+    if (!dom || !lugar) return dom;
+    const nt = (x) => x.toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^A-Z0-9 ]/g, ' ').split(/\s+/).filter(Boolean);
+    const D = dom.split(' '), DL = D.map((t) => nt(t).join('')), L = nt(lugar);
+    if (L.length < 2) return dom;   // (un lugar de una palabra —"SALTA"— no se distingue de la provincia del domicilio)
+    // dónde empieza el lugar dentro del domicilio (sus primeras palabras, en la segunda mitad)
+    for (let i = Math.ceil(D.length / 2); i < D.length; i++) {
+      if (DL[i] !== L[0] || (L[1] && DL.slice(i + 1, i + 4).indexOf(L[1]) < 0)) continue;
+      let k = i;
+      // y la basura de la etiqueta justo antes ("ME ATENTA", "MAMI"): palabras que no son de dirección
+      while (k > 2 && !PROV_FINAL.test(DL[k - 1]) && !/^\d/.test(DL[k - 1]) && DL[k - 1] !== '') k--;
+      const r = D.slice(0, k).join(' ').replace(/[\s,.\-]+$/, '');
+      return r.split(' ').length >= 3 ? r : dom;
+    }
+    return dom;
+  }
+
   function mejorDomicilio(cands) {
     const c = [...new Set(cands.filter(Boolean).map((v) => sinFlechas(arreglarProvincias(arreglarSimbolos(v), true))).filter((v) => v && v.length >= 6))];
     if (!c.length) return null;
@@ -1811,7 +1831,8 @@ const DomicilioOCR = (() => {
       if (x && x.length >= 3 && !/DOMICILIO/.test(x)) candLugar.push(x); };
     const fin = () => {
       // (tal como está impreso en el DNI: "Bº", con el ordinal, no el signo de grados)
-      const domicilio = (mejorDomicilio(cands) || '').replace(/\b([BN])°/g, '$1º') || null; log('🏠 candidatos: ' + JSON.stringify(cands));
+      let domicilio = (mejorDomicilio(cands) || '').replace(/\b([BN])°/g, '$1º') || null; log('🏠 candidatos: ' + JSON.stringify(cands));
+      domicilio = sinLugarAlFinal(domicilio, lugar);
       prog(1); const ms = Math.round(performance.now() - t0); log('⏱ reverso desde foto: ' + ms + ' ms (' + via + ')');
       return { domicilio, cuil, lugarNacimiento: lugar, raw, via, ms, identidad: identidadMRZ,
         fechaVencimiento: identidadMRZ && identidadMRZ.checks && identidadMRZ.checks.vencimiento ? identidadMRZ.fechaVencimiento : null };
@@ -2202,7 +2223,7 @@ const DomicilioOCR = (() => {
 
   return {
     leer: (...a) => enCola(() => leer(...a)),
-    consensoTexto, mejorLugar, mejorDomicilio,
+    consensoTexto, mejorLugar, mejorDomicilio, sinLugarAlFinal,
     leerReversoRapido: (...a) => enCola(() => leerReversoRapido(...a)),
     leerReversoFoto: (...a) => enCola(() => leerReversoFoto(...a)),
     calcularCUIL,

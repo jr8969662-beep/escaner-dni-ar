@@ -1502,6 +1502,7 @@
         detenerCamaraModal();
         if (domicilioPreview && mejorR) { domicilioPreview.src = fotoEnderezada(mejorR, zonaRel(mejorR, mejorR.marcoRel)).toDataURL('image/jpeg', 0.92); domicilioPreview.hidden = false; }
         if (domicilioVideo) domicilioVideo.hidden = true;
+        if (acumR.domicilio && DomicilioOCR.sinLugarAlFinal) acumR.domicilio = DomicilioOCR.sinLugarAlFinal(acumR.domicilio, acumR.lugarNacimiento);
         if (domInputDomicilio) domInputDomicilio.value = acumR.domicilio || '';
         if (domInputNacimiento) domInputNacimiento.value = acumR.lugarNacimiento || '';
         if (domInputCuil) domInputCuil.value = acumR.cuil || '';
