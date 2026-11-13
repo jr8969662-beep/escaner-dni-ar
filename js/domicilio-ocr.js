@@ -565,7 +565,8 @@ const DomicilioOCR = (() => {
 
     // 2b') v57: sin la etiqueta "Ejemplar": la letra está en el mismo renglón que ARGENTINA, un poco a la derecha.
     //      Se lee solo ese pedazo con el OCR limitado a letras (dos tratamientos de imagen).
-    const pArg2 = palabrasF.find((p) => p.b && /ARGENTIN/.test(sinT(p.t)));
+    // (la de la fila de nacionalidad, no la del encabezado "REPÚBLICA ARGENTINA - MERCOSUR": la de más abajo)
+    const pArg2 = palabrasF.filter((p) => p.b && /ARGENTIN/.test(sinT(p.t))).sort((a, b) => b.b.y0 - a.b.y0)[0];
     if (!eEj2 && pArg2 && !cancelado()) {
       const h = Math.max(8, pArg2.b.y1 - pArg2.b.y0);
       const x0 = Math.min(gris.width - 4, pArg2.b.x1 + 0.6 * h), x1 = Math.min(gris.width, pArg2.b.x1 + 14 * h);
@@ -902,7 +903,8 @@ const DomicilioOCR = (() => {
     { const t = s.split(' '), i = t.findIndex((w, k) => k >= 3 && w.replace(/\W/g, '').length >= 5 && parecido(w, 'LUGAR') >= 0.6);
       if (i >= 0) s = t.slice(0, i).join(' '); }
     { const t = s.split(' ');   // cola de ruido: "SALTA LS, -"
-      while (t.length > 3 && (/^[^A-Z0-9ÁÉÍÓÚÑ]*$/.test(t[t.length - 1]) || (/^[A-Z]{1,2}[,.;:]?$/.test(t[t.length - 1]) && !VOCAB_DIR.has(t[t.length - 1].replace(/\W/g, ''))))) t.pop();
+      // (no la letra de un depto, casa, lote...: "DPTO B" es real)
+      while (t.length > 3 && (/^[^A-Z0-9ÁÉÍÓÚÑ]*$/.test(t[t.length - 1]) || (/^[A-Z]{1,2}[,.;:]?$/.test(t[t.length - 1]) && !VOCAB_DIR.has(t[t.length - 1].replace(/\W/g, '')) && !/^(DPTO|DEPTO|DTO|PISO|CASA|LOTE|MZA|MANZANA|BLOCK|TORRE|MONOBLOCK|SECTOR|TIRA|ESC|ESCALERA)$/.test(t[t.length - 2] || '')))) t.pop();
       s = t.join(' '); }
     s = s.replace(/^A[VY][,.;:]?\s+(?=[A-Z0-9])/, 'AV. ');                          // "AY," / "AV," -> "AV."
     s = s.replace(/([A-Z0-9])\s?[.,]\s?B[:;*º°'"´`.”“’‘]?\s(?=[A-Z]{3})/g, '$1 - B° ');  // "DPTO B .B: TRES" -> "DPTO B - B° TRES"
@@ -1684,7 +1686,9 @@ const DomicilioOCR = (() => {
     const pts = (v) => puntajeDireccion(v) + 2 * c.filter((o) => o !== v && parecido(o, v) >= 0.85).length;
     let mejor = c.slice().sort((a, b) => pts(b) - pts(a) || b.length - a.length)[0];
     // con 3 lecturas o más: consenso palabra por palabra (si no queda peor que la mejor lectura sola)
-    const cons = c.length >= 3 ? consensoTexto(c) : null;
+    // (con todas las lecturas, también las repetidas: cada una es un voto)
+    const todas = cands.filter(Boolean).map((v) => sinFlechas(arreglarProvincias(arreglarSimbolos(v), true))).filter((v) => v && v.length >= 6);
+    const cons = todas.length >= 3 ? consensoTexto(todas) : null;
     // (el puntaje castiga las letras sueltas: "DPTO B" puntúa menos que "DPTO 8"; por eso el margen es amplio)
     if (cons && puntajeDireccion(cons) >= puntajeDireccion(mejor) - 4) mejor = cons;
     // punto suelto pegado a una palabra ("MILAGRO. SALTA", "SALTA. CAPITAL"): en el DNI no está; sí en abreviaturas
@@ -1724,7 +1728,7 @@ const DomicilioOCR = (() => {
     // dos clases de lecturas: las del propio lector (su texto ya viene por renglones, bien ordenado aunque el DNI esté
     // torcido) y las armadas acá con la posición de cada palabra (respaldo: con letra rara pueden mezclar renglones)
     const candTexto = candidatosDom(texto, false);
-    const candRect = [zona(-0.02, -0.07, 0.88, 0.33), zDom].filter(Boolean).flatMap((t) => candidatosDom(t, true));
+    const candRect = [zona(-0.02, -0.07, 0.99, 0.30), zDom].filter(Boolean).flatMap((t) => candidatosDom(t, true));
     let raw = '\n--- lector nativo ---\n' + texto;
     if (rel) {
       try {
@@ -2129,7 +2133,7 @@ const DomicilioOCR = (() => {
 
   return {
     leer: (...a) => enCola(() => leer(...a)),
-    consensoTexto, mejorLugar,
+    consensoTexto, mejorLugar, mejorDomicilio,
     leerReversoRapido: (...a) => enCola(() => leerReversoRapido(...a)),
     leerReversoFoto: (...a) => enCola(() => leerReversoFoto(...a)),
     calcularCUIL,
