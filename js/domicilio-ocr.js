@@ -1410,7 +1410,7 @@ const DomicilioOCR = (() => {
     };
     const lugDe = (ts, dom) => {
       const c = ts.flatMap((t) => [extraerLugarNacimiento(t), lugarTrasEtiqueta(t)]).filter(Boolean)
-        .map((v) => arreglarProvincias(String(v).toUpperCase().split(' ').filter((x) => !/^[A-ZÁÉÍÓÚÑ0-9]$/.test(x) || x === 'Y').join(' ').replace(/^(?:Y\s+)+/, '').replace(/[\s,.\-]+$/, '')))
+        .map((v) => arreglarProvincias(String(v).toUpperCase().split(' ').filter((x) => /[A-ZÁÉÍÓÚÑ0-9]/.test(x) && (!/^[A-ZÁÉÍÓÚÑ0-9]$/.test(x) || x === 'Y')).join(' ').replace(/^(?:Y\s+)+/, '').replace(/[\s,.\-]+$/, '')))
         .filter((v) => v && v.length >= 3 && !/DOMICILIO/.test(v) && !(dom && dom.includes(v) && v.length > 8));
       if (c.length) return c.sort((a, b) => puntajeDireccion(b) - puntajeDireccion(a))[0];
       // sin la etiqueta (en el DNI nuevo es chiquita y gris): el último renglón limpio de la franja, debajo del domicilio
