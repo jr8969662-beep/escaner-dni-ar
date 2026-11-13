@@ -314,7 +314,7 @@ const FrenteDNI = (() => {
     }).filter((r) => r.sexo || r.ejemplar);
     const rs = (textos || []).map(parsear).filter(Boolean).concat(filas);
     if (!rs.length && !extra.apellido.length && !Object.values((textos && textos.zonas) || {}).some((z) => z.length)) return null;
-    const out = {};
+    const out = {}, votosDe = {};
     const zonas = (textos && textos.zonas) || {};
     const deZona = { dni: [], fechaNacimiento: [], fechaEmision: [], fechaVencimiento: [], tramite: [], ejemplar: [] };
     (zonas.ejcombo || []).forEach((t) => {   // renglón armado "ARGENTINA  B"
@@ -355,8 +355,20 @@ const FrenteDNI = (() => {
           + (k === 'ejemplar' ? rs.filter((r) => r.ejemplar === mv && r.ejemplarFila).length : 0);
         if (veces < 2) mv = null;
       }
-      out[k] = mv;
+      out[k] = mv; votosDe[k] = c;
     });
+    // v57: la emisión y el vencimiento tienen el MISMO día y mes (el vencimiento es a los 15 u 8 años): si difieren en el
+    // día, gana la fecha con más lecturas y la otra toma su día y mes
+    if (out.fechaEmision && out.fechaVencimiento && out.fechaEmision.slice(5) !== out.fechaVencimiento.slice(5)) {
+      const dy = anioDe(out.fechaVencimiento) - anioDe(out.fechaEmision);
+      if (dy === 15 || dy === 8) {
+        const ve = votosDe.fechaEmision.get(out.fechaEmision) || 0, vv = votosDe.fechaVencimiento.get(out.fechaVencimiento) || 0;
+        // (también cuenta si la otra fecha, con el día corregido, ya había salido en alguna lectura)
+        const eAlt = out.fechaEmision.slice(0, 5) + out.fechaVencimiento.slice(5), vAlt = out.fechaVencimiento.slice(0, 5) + out.fechaEmision.slice(5);
+        const pe = ve + (votosDe.fechaVencimiento.get(vAlt) || 0), pv = vv + (votosDe.fechaEmision.get(eAlt) || 0);
+        if (pv > pe) out.fechaEmision = eAlt; else if (pe > pv) out.fechaVencimiento = vAlt;
+      }
+    }
     out.apellido = elegirNombre(rs.map((r) => r.apellido).filter(Boolean).concat(extra.apellido.map(comoNombre).filter(Boolean)));
     out.nombre = elegirNombre(rs.map((r) => r.nombre).filter(Boolean).concat(extra.nombre.map(comoNombre).filter(Boolean)));
     // "SANCHEZ CARLOS ALBERTO" como nombre: se le saca el apellido de adelante

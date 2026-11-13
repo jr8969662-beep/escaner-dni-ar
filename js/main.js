@@ -1096,9 +1096,20 @@
     const dni = String((ultimoResultado && (ultimoResultado.dni || ultimoResultado.numero)) || '').replace(/\D/g, '');
     const sexo = String((ultimoResultado && ultimoResultado.sexo) || '');
     let r = null;
+    // v57: DNI nuevo: el QR de la misma foto (en el hilo aparte) corrige trámite, ejemplar, emisión y nombres del frente
+    const pQRf = (tipoDNI === 'nuevo' && typeof QRDNINuevo !== 'undefined') ? QRDNINuevo.decodificar(foto).catch(() => null) : null;
+    // y si falta el vencimiento o el sexo (DNI viejo leído por el código de barras), las líneas <<<
+    const conMRZf = !!(ultimoResultado && (!ultimoResultado.fechaVencimiento || !ultimoResultado.sexo));
     try {
-      r = await DomicilioOCR.leerReversoFoto(foto, { dni, sexo, marcoRel, tipo: tipoDNI }, (p) => { if (domicilioProgressFill) domicilioProgressFill.style.width = Math.round(p * 100) + '%'; });
+      r = await DomicilioOCR.leerReversoFoto(foto, { dni, sexo, marcoRel, tipo: tipoDNI, conMRZ: conMRZf }, (p) => { if (domicilioProgressFill) domicilioProgressFill.style.width = Math.round(p * 100) + '%'; });
     } catch (e) { console.warn('Reverso (foto):', e); }
+    const idM = r && r.identidad && r.identidad.dni === dni ? r.identidad : null;
+    if (idM) ultimaIdentidad = Object.assign({}, ultimaIdentidad || {}, { sexo: idM.sexo, fechaVencimiento: (r && r.fechaVencimiento) || (ultimaIdentidad && ultimaIdentidad.fechaVencimiento), checks: idM.checks });
+    if (pQRf) {
+      const rq = await Promise.race([pQRf, new Promise((ok) => setTimeout(() => ok(null), 4000))]);
+      if (rq && rq.datos && String(rq.datos.dni) === dni) ultimaIdentidad = combinarIdentidad(rq.datos, idM ? Object.assign({}, idM, { fechaVencimiento: (r && r.fechaVencimiento) || idM.fechaVencimiento }) : ultimaIdentidad);
+    }
+    if (idM && ultimoResultado && !ultimoResultado.sexo && idM.checks && idM.checks.nacimiento && idM.checks.vencimiento) ultimoResultado.sexo = idM.sexo;
     // CUIL: si no se pudo leer, se calcula con el DNI y el sexo (y se avisa que hay que confirmarlo)
     let cuil = r && r.cuil, cuilCalculado = false;
     if (!cuil && dni && DomicilioOCR.calcularCUIL) { cuil = DomicilioOCR.calcularCUIL(dni, sexo); cuilCalculado = !!cuil; }
@@ -1106,8 +1117,8 @@
     if (domInputDomicilio) domInputDomicilio.value = (r && r.domicilio) || '';
     if (domInputNacimiento) domInputNacimiento.value = (r && r.lugarNacimiento) || '';
     if (domInputCuil) domInputCuil.value = cuil || '';
-    if (domInputVencimiento) domInputVencimiento.value = (ultimoResultado && ultimoResultado.fechaVencimiento) || '';
-    if (domInputNacionalidad) domInputNacionalidad.value = (ultimoResultado && ultimoResultado.nacionalidad) || '';
+    if (domInputVencimiento) domInputVencimiento.value = (ultimoResultado && ultimoResultado.fechaVencimiento) || (r && r.fechaVencimiento) || '';
+    if (domInputNacionalidad) domInputNacionalidad.value = (ultimoResultado && ultimoResultado.nacionalidad) || (idM && idM.nacionalidad) || '';
     if (domicilioProgress) domicilioProgress.hidden = true;
     if (domicilioResultado) domicilioResultado.hidden = false;
     if (btnGuardarDomicilio) btnGuardarDomicilio.hidden = false;
@@ -1449,7 +1460,7 @@
       const confirmado = (lista) => { const n = lista.map(normDL).filter(Boolean); return n.some((x, i) => n.indexOf(x) !== i); };
       const consenso = (lista) => {   // el que más se parece a los demás (y, a igualdad, el más repetido)
         if (!lista.length) return null;
-        if (lista.length >= 3 && DomicilioOCR.consensoTexto) { const cs = DomicilioOCR.consensoTexto(lista); if (cs) return cs; }
+        if (lista.length >= 3 && DomicilioOCR.consensoTexto && tipoDNI === 'nuevo') { const cs = DomicilioOCR.consensoTexto(lista); if (cs) return cs; }
         const sim = (a, b) => FrenteDNI.similitud(a, b);
         return lista.map((v) => ({ v, p: lista.reduce((t, o) => t + sim(v, o), 0) + 0.001 * v.length })).sort((a, b) => b.p - a.p)[0].v;
       };
@@ -1465,7 +1476,7 @@
         const c = await capturarMasNitidoRecortado(2, 60);
         const pQRr = (esNuevoR && !qrR) ? QRDNINuevo.decodificar(c).catch(() => null) : null;
         try {
-          const r = await DomicilioOCR.leerReversoRapido(c, { dni: dniFrente, sexo, marcoRel: c.marcoRel || null, conMRZ: conMRZ && intento <= 3 && !(identR && identR.sexo && acumR.fechaVencimiento), esperarMRZ: conMRZ && !acumR.fechaVencimiento && intento <= 3, intento }, (p) => {
+          const r = await DomicilioOCR.leerReversoRapido(c, { dni: dniFrente, sexo, marcoRel: c.marcoRel || null, conMRZ: conMRZ && intento <= 3 && !(identR && identR.sexo && acumR.fechaVencimiento), esperarMRZ: conMRZ && !acumR.fechaVencimiento && intento <= 3, intento, tipo: tipoDNI }, (p) => {
             if (domicilioProgressFill) domicilioProgressFill.style.width = (p * 100) + '%';
           });
           if (!autoScanActivo) break;
@@ -1491,6 +1502,7 @@
         detenerCamaraModal();
         if (domicilioPreview && mejorR) { domicilioPreview.src = fotoEnderezada(mejorR, zonaRel(mejorR, mejorR.marcoRel)).toDataURL('image/jpeg', 0.92); domicilioPreview.hidden = false; }
         if (domicilioVideo) domicilioVideo.hidden = true;
+        if (acumR.domicilio && DomicilioOCR.sinLugarAlFinal) acumR.domicilio = DomicilioOCR.sinLugarAlFinal(acumR.domicilio, acumR.lugarNacimiento);
         if (domInputDomicilio) domInputDomicilio.value = acumR.domicilio || '';
         if (domInputNacimiento) domInputNacimiento.value = acumR.lugarNacimiento || '';
         if (domInputCuil) domInputCuil.value = acumR.cuil || '';
