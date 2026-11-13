@@ -1655,7 +1655,8 @@ const DomicilioOCR = (() => {
     let mejor = c.slice().sort((a, b) => pts(b) - pts(a) || b.length - a.length)[0];
     // con 3 lecturas o más: consenso palabra por palabra (si no queda peor que la mejor lectura sola)
     const cons = c.length >= 3 ? consensoTexto(c) : null;
-    if (cons && puntajeDireccion(cons) >= puntajeDireccion(mejor) - 1) mejor = cons;
+    // (el puntaje castiga las letras sueltas: "DPTO B" puntúa menos que "DPTO 8"; por eso el margen es amplio)
+    if (cons && puntajeDireccion(cons) >= puntajeDireccion(mejor) - 4) mejor = cons;
     // punto suelto pegado a una palabra ("MILAGRO. SALTA", "SALTA. CAPITAL"): en el DNI no está; sí en abreviaturas
     const ABREV = new Set(['PROV', 'AVDA', 'GRAL', 'PRES', 'PROF', 'DPTO', 'DEPTO', 'MZNA', 'BARR', 'CNEL', 'TTE', 'SGTO', 'ING', 'GOB', 'PJE', 'DOCT']);
     return mejor.replace(/\b([A-ZÁÉÍÓÚÑ]{3,})\.(?=\s|$)/g, (m, w) => (ABREV.has(w) ? m : w)).replace(/\s+/g, ' ').trim();
