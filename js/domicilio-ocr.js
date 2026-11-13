@@ -517,6 +517,21 @@ const DomicilioOCR = (() => {
           destino.push(t2 || '');
           log('📄 zona ' + e.k + ' (luz normalizada): ' + t2);
         }
+        // v57: el trámite (11 números) y el ejemplar (una letra) se releen con el OCR limitado a números / letras:
+        // así no confunde un 3 con una B ni lee basura del fondo. Cada lectura suma un voto; gana la que más se repite.
+        if (e.k === 'tramite' || e.k === 'ejemplar') {
+          const soloNum = e.k === 'tramite';
+          await w.setParameters({ tessedit_char_whitelist: soloNum ? '0123456789' : 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', preserve_interword_spaces: '0', tessedit_pageseg_mode: soloNum ? '7' : '6' });
+          for (const base of [gris, grisF]) {
+            if (cancelado()) break;
+            const { data: { text: t3 } } = await w.recognize(recorte(base));
+            const v = String(t3 || '').replace(/\s+/g, soloNum ? '' : ' ').trim();
+            if (soloNum) { const m = /(\d{11})/.exec(v); if (m) destino.push(m[1]); }
+            else { const ls = v.split(/\n/).map((x) => x.trim()).filter(Boolean); const un = ls.filter((x) => /^[A-Z]$/.test(x)); if (un.length === 1) destino.push(un[0]); }
+            log('📄 zona ' + e.k + ' (solo ' + (soloNum ? 'números' : 'letras') + '): ' + v);
+          }
+          await setPsm('7');
+        }
       }
     }
 
@@ -847,6 +862,7 @@ const DomicilioOCR = (() => {
     s = s.replace(/(\d{2,}\s)B\s(?=[A-Z]{3,}\s)/g, '$1B° ');                            // "401 B CIUDAD" (el ° no se leyó)
     s = s.replace(/(^|\s-\s)V\s(?=[A-Z]{3})/g, '$1Vª ');                              // "V BEBA" (Villa) -> "Vª BEBA"
     s = s.replace(/\bN\s?[*º°'"´`](?=\s|\d)/g, 'N° ').replace(/\bV\s?[*°º](?=\s|[A-Z])/g, 'Vª ');
+    s = s.replace(/\b[TIOD0]?[OD0Q]PT[O0Q]\b/g, 'DPTO');                                  // "TOPTO", "OPTO", "D0PTO" -> "DPTO"
     s = s.replace(/\b(?:LI|IL|L1|1L|I1|1I)(?=\s*-|\s*$)/g, 'II');                     // "PABLO LI -" -> "PABLO II -"
     s = s.replace(/\bPA\s(?=BLO\b)/g, 'PA');                                         // "PA BLO" -> "PABLO"
     s = s.replace(/\b(PABLO)\s(?:MU|NU|LU|LL|LI|IL|L1|1L|I1|1I|11|UH|NI|IN|LT|TI|U|H|M|N|I|L)(?=\s*[-(]|\s*$)/g, '$1 II');   // "PABLO LL (ZONA" -> "PABLO II (ZONA"
@@ -1294,8 +1310,19 @@ const DomicilioOCR = (() => {
   async function leerReversoRapido(fuente, contexto = {}, onProgress) {
     progresoCb = typeof onProgress === 'function' ? onProgress : null;
     const w = await initWorker();
-    const origen = await aElemento(fuente);
-    const rel = contexto.marcoRel || [0, 0, 1, 1];
+    let origen = await aElemento(fuente);
+    let rel = contexto.marcoRel || [0, 0, 1, 1];
+    // v57: se ubica la tarjeta por sus bordes y se endereza: así cada franja cae justo sobre su renglón
+    // (antes se tomaba el marco de la pantalla, y si el DNI no estaba justo, el domicilio salía cortado: "SAN CARL")
+    let enderezada = false;
+    if (typeof Encuadre !== 'undefined' && !contexto.sinEncuadre) {
+      try {
+        const cv = aCanvas(origen), W0 = cv.width, H0 = cv.height;
+        const z = contexto.marcoRel ? { x: rel[0] * W0, y: rel[1] * H0, w: (rel[2] - rel[0]) * W0, h: (rel[3] - rel[1]) * H0 } : null;
+        const e = Encuadre.enderezar(cv, z);
+        if (e && e.prop > 1.42 && e.prop < 1.78) { origen = e.canvas; rel = [0, 0, 1, 1]; enderezada = true; log('⚡ tarjeta ubicada por sus bordes'); }
+      } catch (er) { /* sigue con el marco */ }
+    }
     const anchoO = origen.videoWidth || origen.naturalWidth || origen.width;
     const ancho = anchoO * (rel[2] - rel[0]);
     // franja en coordenadas de la TARJETA (0-1, puede salirse un poco del marco: el DNI no siempre queda justo)
@@ -1335,7 +1362,9 @@ const DomicilioOCR = (() => {
     // (tamaño justo: letra de unos 24 px. Más grande no lee mejor y en el celular tarda el doble)
     // (si el 1.er intento no alcanzó, los siguientes más grandes: más lentos pero aguantan mejor una foto borrosa)
     const extra = (contexto.intento || 1) > 1, AT = extra ? 2300 : 1800, AC = extra ? 1700 : 1300;
-    const top = franja(-0.02, -0.07, 0.88, 0.33, Math.min(3, AT / (ancho * 0.9)), AT);
+    // (hasta el borde derecho: el 1.er renglón del domicilio llega casi al final de la tarjeta, arriba del QR)
+    const BT = enderezada ? [-0.01, -0.02, 1.0, 0.30] : [-0.02, -0.07, 0.98, 0.33];
+    const top = franja(BT[0], BT[1], BT[2], BT[3], Math.min(3, AT / (ancho * (BT[2] - BT[0]))), AT);
     const tTop = await leerZona(await preprocesar(top), 'franja domicilio y lugar', 0, 0.45);
     // franja del CUIL
     const cu = franja(-0.02, 0.40, 0.66, 0.70, Math.min(3, AC / (ancho * 0.68)), AC);
@@ -1352,7 +1381,7 @@ const DomicilioOCR = (() => {
     };
     const lugDe = (ts, dom) => {
       const c = ts.flatMap((t) => [extraerLugarNacimiento(t), lugarTrasEtiqueta(t)]).filter(Boolean)
-        .map((v) => arreglarProvincias(String(v).toUpperCase().split(' ').filter((x) => !/^[A-ZÁÉÍÓÚÑ0-9]$/.test(x) || x === 'Y').join(' ').replace(/[\s,.\-]+$/, '')))
+        .map((v) => arreglarProvincias(String(v).toUpperCase().split(' ').filter((x) => !/^[A-ZÁÉÍÓÚÑ0-9]$/.test(x) || x === 'Y').join(' ').replace(/^(?:Y\s+)+/, '').replace(/[\s,.\-]+$/, '')))
         .filter((v) => v && v.length >= 3 && !/DOMICILIO/.test(v) && !(dom && dom.includes(v) && v.length > 8));
       if (c.length) return c.sort((a, b) => puntajeDireccion(b) - puntajeDireccion(a))[0];
       // sin la etiqueta (en el DNI nuevo es chiquita y gris): el último renglón limpio de la franja, debajo del domicilio
@@ -1376,7 +1405,7 @@ const DomicilioOCR = (() => {
     // si algo quedó dudoso, la misma franja en blanco y negro (umbral local): con fotos reales suele leer más limpio
     // (en el 1.er intento solo si no salió nada: suele convenir más otro cuadro de la cámara)
     if (extra ? !limpia(domicilio) : !domicilio) {
-      textosTop.push(await leerZona(binarizarCanvas(franja(-0.02, -0.07, 0.88, 0.33, Math.min(3, AT / (ancho * 0.9)), AT)), 'franja domicilio (blanco y negro)', 0.7, 0.88));
+      textosTop.push(await leerZona(binarizarCanvas(franja(BT[0], BT[1], BT[2], BT[3], Math.min(3, AT / (ancho * (BT[2] - BT[0]))), AT)), 'franja domicilio (blanco y negro)', 0.7, 0.88));
       domicilio = domDe(textosTop);
     }
     if (!cuil) {
@@ -1518,11 +1547,65 @@ const DomicilioOCR = (() => {
   const sinFlechas = (v) => String(v).replace(/\s*[<>«»]+\s*/g, ' - ').replace(/(\s-)+\s/g, ' - ').replace(/\s+/g, ' ').replace(/[\s\-]+$/, '').trim();
   // Entre todas las lecturas, la más completa y limpia: palabras de dirección reales suman, basura resta, y suma
   // si otra lectura dice casi lo mismo. A igual puntaje, la más larga (la que no cortó "PABLO II" ni el 2.º renglón).
+  // v57: CONSENSO entre varias lecturas de un mismo renglón (domicilio, lugar): se toma la lectura que más se parece
+  // a las demás y, palabra por palabra, se corrige con lo que dice la mayoría (alineando las palabras). Así un error
+  // que aparece en una sola lectura ("950" por "PISO", un "B°" perdido) se corrige con las otras.
+  function consensoTexto(cands) {
+    const c = cands.filter(Boolean).map((v) => String(v).replace(/\s+/g, ' ').trim()).filter((v) => v.length >= 3);
+    if (c.length < 3) return null;
+    const simT = (a, b) => { if (a === b) return 1; const A = a.toUpperCase().replace(/[^A-Z0-9ÁÉÍÓÚÑ]/g, ''), B = b.toUpperCase().replace(/[^A-Z0-9ÁÉÍÓÚÑ]/g, ''); if (!A || !B) return A === B ? 0.9 : 0; return 1 - lev(A, B) / Math.max(A.length, B.length); };
+    const sim = (a, b) => { const A = a.toUpperCase(), B = b.toUpperCase(); return A === B ? 1 : (1 - lev(A, B) / Math.max(A.length, B.length)); };
+    const base = c.map((v) => ({ v, p: c.reduce((t, o) => t + sim(v, o), 0) })).sort((x, y) => y.p - x.p)[0].v;
+    const B = base.split(' ');
+    const votos = B.map((t) => new Map([[t, 1]]));   // para cada palabra de la base: qué dicen las otras lecturas
+    const inserciones = new Map();                     // palabras que la base no tiene: "pos|palabra" -> lecturas
+    c.forEach((o) => {
+      if (o === base) return;
+      const O = o.split(' '), n = B.length, m = O.length;
+      // alineación de palabras (como una distancia de edición, con costo según cuánto se parecen)
+      const D = Array.from({ length: n + 1 }, () => new Float32Array(m + 1));
+      for (let i = 0; i <= n; i++) D[i][0] = i; for (let j = 0; j <= m; j++) D[0][j] = j;
+      for (let i = 1; i <= n; i++) for (let j = 1; j <= m; j++) {
+        const st = simT(B[i - 1], O[j - 1]);
+        D[i][j] = Math.min(D[i - 1][j] + 1, D[i][j - 1] + 1, D[i - 1][j - 1] + (st >= 0.5 ? 1 - st : 1.6));
+      }
+      let i = n, j = m;
+      while (i > 0 || j > 0) {
+        if (i > 0 && j > 0) { const st = simT(B[i - 1], O[j - 1]); if (Math.abs(D[i][j] - (D[i - 1][j - 1] + (st >= 0.5 ? 1 - st : 1.6))) < 1e-4 && st >= 0.5) { const mm = votos[i - 1]; mm.set(O[j - 1], (mm.get(O[j - 1]) || 0) + 1); i--; j--; continue; } }
+        if (j > 0 && (i === 0 || Math.abs(D[i][j] - (D[i][j - 1] + 1)) < 1e-4)) { const k = i + '|' + O[j - 1]; inserciones.set(k, (inserciones.get(k) || 0) + 1); j--; continue; }
+        if (i > 0 && j > 0 && Math.abs(D[i][j] - (D[i - 1][j - 1] + 1.6)) < 1e-4) { i--; j--; continue; }
+        i--;
+      }
+    });
+    const mitad = c.length / 2;
+    const out = [];
+    for (let i = 0; i <= B.length; i++) {
+      // palabra que falta en la base pero está en la mayoría de las lecturas, en este lugar
+      inserciones.forEach((n, k) => { const [pos, w] = k.split('|'); if (+pos === i && n + 1 > mitad && !out.includes(w)) out.push(w); });
+      if (i === B.length) break;
+      const mm = [...votos[i].entries()].sort((x, y) => y[1] - x[1] || puntajeDireccion(y[0]) - puntajeDireccion(x[0]));
+      // palabra de la base que casi ninguna otra lectura tiene (ruido de una sola lectura): afuera
+      const total = [...votos[i].values()].reduce((t, x) => t + x, 0);
+      if (total === 1 && c.length >= 4) continue;
+      out.push(mm[0][0]);
+    }
+    return out.join(' ').replace(/\s+/g, ' ').trim();
+  }
+  function lev(a, b) {
+    const m = a.length, n = b.length; if (!m) return n; if (!n) return m;
+    let prev = Array.from({ length: n + 1 }, (_, j) => j);
+    for (let i = 1; i <= m; i++) { const cur = [i]; for (let j = 1; j <= n; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)); prev = cur; }
+    return prev[n];
+  }
+
   function mejorDomicilio(cands) {
     const c = [...new Set(cands.filter(Boolean).map((v) => sinFlechas(arreglarProvincias(arreglarSimbolos(v), true))).filter((v) => v && v.length >= 6))];
     if (!c.length) return null;
     const pts = (v) => puntajeDireccion(v) + 2 * c.filter((o) => o !== v && parecido(o, v) >= 0.85).length;
-    const mejor = c.sort((a, b) => pts(b) - pts(a) || b.length - a.length)[0];
+    let mejor = c.slice().sort((a, b) => pts(b) - pts(a) || b.length - a.length)[0];
+    // con 3 lecturas o más: consenso palabra por palabra (si no queda peor que la mejor lectura sola)
+    const cons = c.length >= 3 ? consensoTexto(c) : null;
+    if (cons && puntajeDireccion(cons) >= puntajeDireccion(mejor) - 1) mejor = cons;
     // punto suelto pegado a una palabra ("MILAGRO. SALTA", "SALTA. CAPITAL"): en el DNI no está; sí en abreviaturas
     const ABREV = new Set(['PROV', 'AVDA', 'GRAL', 'PRES', 'PROF', 'DPTO', 'DEPTO', 'MZNA', 'BARR', 'CNEL', 'TTE', 'SGTO', 'ING', 'GOB', 'PJE', 'DOCT']);
     return mejor.replace(/\b([A-ZÁÉÍÓÚÑ]{3,})\.(?=\s|$)/g, (m, w) => (ABREV.has(w) ? m : w)).replace(/\s+/g, ' ').trim();
@@ -1955,6 +2038,7 @@ const DomicilioOCR = (() => {
 
   return {
     leer: (...a) => enCola(() => leer(...a)),
+    consensoTexto,
     leerReversoRapido: (...a) => enCola(() => leerReversoRapido(...a)),
     leerReversoFoto: (...a) => enCola(() => leerReversoFoto(...a)),
     calcularCUIL,

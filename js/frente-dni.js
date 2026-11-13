@@ -415,7 +415,9 @@ const FrenteDNI = (() => {
 
   // ¿La lectura tiene todo y es coherente? (permite cortar el OCR antes y que el escaneo sea más rápido)
   function completo(r) {
+    // (v57: también el trámite y el ejemplar: si falta alguno se siguen leyendo las zonas en vez de cortar antes)
     return !!(r && r.dni && r.apellido && r.nombre && r.sexo && r.fechaNacimiento && r.fechaEmision && r.fechaVencimiento &&
+      /^\d{11}$/.test(r.tramite || '') && /^[A-Z]$/.test(r.ejemplar || '') &&
       (anioDe(r.fechaVencimiento) - anioDe(r.fechaEmision) === 15 || anioDe(r.fechaVencimiento) - anioDe(r.fechaEmision) === 8));
   }
 
