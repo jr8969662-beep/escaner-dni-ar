@@ -563,6 +563,30 @@ const DomicilioOCR = (() => {
       log('📄 zona ejemplar (renglón armado): ' + text);
     }
 
+    // 2b') v57: sin la etiqueta "Ejemplar": la letra está en el mismo renglón que ARGENTINA, un poco a la derecha.
+    //      Se lee solo ese pedazo con el OCR limitado a letras (dos tratamientos de imagen).
+    const pArg2 = palabrasF.find((p) => p.b && /ARGENTIN/.test(sinT(p.t)));
+    if (!eEj2 && pArg2 && !cancelado()) {
+      const h = Math.max(8, pArg2.b.y1 - pArg2.b.y0);
+      const x0 = Math.min(gris.width - 4, pArg2.b.x1 + 0.6 * h), x1 = Math.min(gris.width, pArg2.b.x1 + 14 * h);
+      const y0 = Math.max(0, pArg2.b.y0 - 0.4 * h), y1 = Math.min(gris.height, pArg2.b.y1 + 0.4 * h);
+      if (x1 - x0 > 2 * h) {
+        await w.setParameters({ tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', preserve_interword_spaces: '0', tessedit_pageseg_mode: '7' });
+        const esc = Math.max(1, Math.min(4, 48 / h));
+        for (const base of [gris, grisF]) {
+          const z = document.createElement('canvas'), pad = 14;
+          z.width = Math.round((x1 - x0) * esc) + 2 * pad; z.height = Math.round((y1 - y0) * esc) + 2 * pad;
+          const zc = z.getContext('2d'); zc.fillStyle = '#fff'; zc.fillRect(0, 0, z.width, z.height); zc.imageSmoothingQuality = 'high';
+          zc.drawImage(base, x0, y0, x1 - x0, y1 - y0, pad, pad, z.width - 2 * pad, z.height - 2 * pad);
+          const t = String((await w.recognize(z)).data.text || '').trim();
+          const m = /^([A-Z])\1?$/.exec(t.replace(/\s+/g, ''));
+          if (m) textos.zonas.ejemplar.push(m[1]);
+          log('📄 ejemplar junto a ARGENTINA (solo letras): ' + t);
+        }
+        await setPsm('6');
+      }
+    }
+
     // 2c) v57: el número de trámite (11 cifras) se relee en el lugar exacto donde la pasada general vio un número largo,
     //     con el OCR limitado a números y con dos tratamientos de imagen (aunque no se haya visto la etiqueta "Trámite")
     if (!cancelado()) {
