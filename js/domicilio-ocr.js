@@ -1433,7 +1433,9 @@ const DomicilioOCR = (() => {
     // (si el 1.er intento no alcanzó, los siguientes más grandes: más lentos pero aguantan mejor una foto borrosa)
     const extra = (contexto.intento || 1) > 1, AT = (contexto.intento || 1) >= 3 ? 2800 : extra ? 2300 : 1800, AC = extra ? 1700 : 1300;
     // (hasta el borde derecho: el 1.er renglón del domicilio llega casi al final de la tarjeta, arriba del QR)
-    const BT = enderezada ? [-0.01, -0.02, 1.0, 0.30] : [-0.02, -0.07, 0.98, 0.33];
+    // (DNI viejo: el domicilio no llega tan a la derecha y más ancho se colaba el lugar de nacimiento: como antes)
+    const viejo = contexto.tipo === 'viejo';
+    const BT = viejo ? (enderezada ? [-0.01, -0.02, 0.90, 0.30] : [-0.02, -0.07, 0.88, 0.33]) : (enderezada ? [-0.01, -0.02, 1.0, 0.30] : [-0.02, -0.07, 0.98, 0.33]);
     const top = franja(BT[0], BT[1], BT[2], BT[3], Math.min(3, AT / (ancho * (BT[2] - BT[0]))), AT);
     const tTop = await leerZona(await preprocesar(top), 'franja domicilio y lugar', 0, 0.45);
     // franja del CUIL
@@ -1547,12 +1549,12 @@ const DomicilioOCR = (() => {
     return o;
   }
   // franja del domicilio (en fracciones de la tarjeta), ya en gris y con contraste
-  async function franjaDomicilio(base, rel, modo) {
+  async function franjaDomicilio(base, rel, modo, viejo) {
     const W = rel[2] - rel[0], H = rel[3] - rel[1];
     // (ajustada a los renglones del domicilio y el lugar de nacimiento: en el DNI viejo van del 6 % al 20 % del
     //  alto y en el nuevo del 3 % al 22 %; con la tarjeta ubicada por las líneas <<< no hace falta más margen,
     //  y una franja con mucho dibujo de seguridad o borde de la foto el OCR la lee mucho peor)
-    const x0 = Math.max(0, rel[0] - 0.01 * W), x1 = Math.min(1, rel[0] + 0.99 * W), y0 = Math.max(0, rel[1] - 0.01 * H), y1 = Math.min(1, rel[1] + 0.25 * H);
+    const x0 = Math.max(0, rel[0] - 0.01 * W), x1 = Math.min(1, rel[0] + (viejo ? 0.86 : 0.99) * W), y0 = Math.max(0, rel[1] - 0.01 * H), y1 = Math.min(1, rel[1] + 0.25 * H);
     const ancho = (base.width) * (rel[2] - rel[0]);
     return preprocesar(recortarRel(base, x0, y0, x1, y1, Math.min(3, 1800 / (ancho * 0.9)), 1800, 14), modo);
   }
@@ -1802,6 +1804,7 @@ const DomicilioOCR = (() => {
     const ctx = { dni: dni || null, sexo: /^F/i.test(sx) ? 'F' : /^M/i.test(sx) ? 'M' : null };
     let raw = '', rel = null, cuil = null, lugar = null, via = 'tesseract';
     const cands = [], candLugar = [];
+    let identidadMRZ = null;
     // lugar de nacimiento leído en cualquier pasada (tras su etiqueta): suma candidatos para elegir el más completo
     const sumarLugar = (t) => { const v = lugarTrasEtiqueta(t); if (!v) return;
       const x = arreglarProvincias(String(v).toUpperCase().split(' ').filter((w) => /[A-ZÁÉÍÓÚÑ0-9]/.test(w) && (!/^[A-ZÁÉÍÓÚÑ0-9]$/.test(w) || w === 'Y')).join(' ').replace(/^(?:Y\s+)+/, '').replace(/[\s,.\-]+$/, ''));
@@ -1810,7 +1813,8 @@ const DomicilioOCR = (() => {
       // (tal como está impreso en el DNI: "Bº", con el ordinal, no el signo de grados)
       const domicilio = (mejorDomicilio(cands) || '').replace(/\b([BN])°/g, '$1º') || null; log('🏠 candidatos: ' + JSON.stringify(cands));
       prog(1); const ms = Math.round(performance.now() - t0); log('⏱ reverso desde foto: ' + ms + ' ms (' + via + ')');
-      return { domicilio, cuil, lugarNacimiento: lugar, raw, via, ms };
+      return { domicilio, cuil, lugarNacimiento: lugar, raw, via, ms, identidad: identidadMRZ,
+        fechaVencimiento: identidadMRZ && identidadMRZ.checks && identidadMRZ.checks.vencimiento ? identidadMRZ.fechaVencimiento : null };
     };
 
     // 1) APK: lector nativo
@@ -1879,7 +1883,7 @@ const DomicilioOCR = (() => {
       // la tarjeta a unos 1500 px de ancho: tamaño justo de letra para el OCR (una foto 4K no lee mejor y tarda mucho más)
       const anchoT = (rel[2] - rel[0]) * origen.width;
       const base = blanquearFuera(anchoT > 1600 ? escalarA(origen, Math.round(origen.width * 1500 / anchoT)) : origen, rel);
-      const zonas = async (intento, desde, hasta) => leerReversoRapido(base, { dni: ctx.dni, sexo: ctx.sexo, marcoRel: rel, conMRZ: false, intento }, (p) => prog(desde + p * (hasta - desde)));
+      const zonas = async (intento, desde, hasta) => leerReversoRapido(base, { dni: ctx.dni, sexo: ctx.sexo, marcoRel: rel, conMRZ: false, intento, sinEncuadre: true, tipo: contexto.tipo }, (p) => prog(desde + p * (hasta - desde)));
       const r = await zonas(1, 0.25, 0.6);
       raw += r.raw || '';
       cands.push(r.domicilio); cuil = cuil || r.cuil; lugar = r.lugarNacimiento; if (lugar) candLugar.push(lugar);
@@ -1890,10 +1894,10 @@ const DomicilioOCR = (() => {
       const dR = mejorDomicilio(cands), tokR = dR ? dR.split(/[\s,]+/).filter((x) => x && x !== '-').length : 0;
       const limpioR = dR && puntajeDireccion(dR) >= tokR + 2 && !/\b(?!AV|B°|N°|Vª|II|DE|LA|EL|Y)[A-Z]{1,2}\b/.test(dR);
       await w.setParameters(PARAMS_ZONA);
-      const fD = await franjaDomicilio(base, rel);
+      const fD = await franjaDomicilio(base, rel, undefined, contexto.tipo === 'viejo');
       // con la luz normalizada (cada píxel dividido por el brillo del papel alrededor): letra gris, DNI gastado,
       // luz despareja de un lado al otro de la foto
-      { const tA = (await w.recognize(await franjaDomicilio(base, rel, 'fondo'))).data.text || '';
+      { const tA = (await w.recognize(await franjaDomicilio(base, rel, 'fondo', contexto.tipo === 'viejo'))).data.text || '';
         raw += '\n--- franja domicilio (ajustada, luz normalizada) ---\n' + tA;
         cands.push(...candidatosDom(tA, true)); sumarLugar(tA); }
       for (const extra of (contexto.tipo === 'nuevo' && limpioR ? [] : [0, 10])) {
@@ -1920,6 +1924,22 @@ const DomicilioOCR = (() => {
         }
       }
       lugar = mejorLugar(candLugar) || lugar;
+      // v57: si falta el vencimiento o el sexo, las líneas <<< de la misma foto (con sus dígitos de control)
+      if (contexto.conMRZ) {
+        try {
+          const W = rel[2] - rel[0], H = rel[3] - rel[1];
+          const fr = (an) => recortarRel(base, Math.max(0, rel[0] - 0.03 * W), Math.max(0, rel[1] + 0.58 * H), Math.min(1, rel[2] + 0.03 * W), Math.min(1, rel[1] + 1.05 * H), an > 1900 ? 1.4 : 1, an, 14);
+          const wm = await initWorkerMRZ();
+          const leerM = async (img) => { if (wm) return (await enColaMRZ(() => wm.recognize(img))).data.text || ''; await w.setParameters(PARAMS_MRZ); const t = (await w.recognize(img)).data.text || ''; await w.setParameters(PARAMS_TEXTO); return t; };
+          for (const [modo, an] of [['fondo', 1900], [undefined, 1900], ['fondo', 2400]]) {
+            const t = await leerM(await preprocesar(fr(an), modo));
+            raw += '\n--- MRZ (foto) ---\n' + t;
+            const id = extraerMRZCompleta(t);
+            if (id && (!identidadMRZ || puntajeIdentidad(id) > puntajeIdentidad(identidadMRZ))) identidadMRZ = id;
+            if (id && id.verificada) break;
+          }
+        } catch (e) { log('MRZ foto: ' + e); }
+      }
       if (mejorDomicilio(cands) || cuil) return fin();
     }
 
