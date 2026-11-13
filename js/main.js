@@ -1437,27 +1437,51 @@
       const sx = String((ultimoResultado && ultimoResultado.sexo) || '');
       const sexo = /^F/i.test(sx) ? 'F' : /^M/i.test(sx) ? 'M' : null;
       const acumR = {}; let rawR = '', mejorR = null, domLimpio = false, identR = null;
-      const MAX_R = 4;
-      // se corta apenas están los tres (con el domicilio limpio, o ya en el 2.º intento)
-      const listoR = (intento) => acumR.domicilio && acumR.cuil && acumR.lugarNacimiento && (domLimpio || intento > 1);
+      const MAX_R = 5;
+      // v57: precisión antes que velocidad. El domicilio y el lugar se leen en varios cuadros distintos de la cámara y
+      // se usa el que COINCIDE entre lecturas (un error del OCR casi nunca se repite igual en dos cuadros).
+      const candDom = [], candLug = [], porCuadroDom = new Map();
+      // v57: DNI nuevo: el QR del reverso trae EXACTOS el trámite, el ejemplar, la emisión y los nombres. Se lee también
+      // en este modo (en el hilo aparte, sin trabar la cámara) para corregir lo que el OCR del frente leyó mal.
+      const esNuevoR = tipoDNI === 'nuevo' && typeof QRDNINuevo !== 'undefined';
+      let qrR = null;
+      const normDL = (x) => String(x || '').toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^A-Z0-9]/g, '');
+      const confirmado = (lista) => { const n = lista.map(normDL).filter(Boolean); return n.some((x, i) => n.indexOf(x) !== i); };
+      const consenso = (lista) => {   // el que más se parece a los demás (y, a igualdad, el más repetido)
+        if (!lista.length) return null;
+        if (lista.length >= 3 && DomicilioOCR.consensoTexto) { const cs = DomicilioOCR.consensoTexto(lista); if (cs) return cs; }
+        const sim = (a, b) => FrenteDNI.similitud(a, b);
+        return lista.map((v) => ({ v, p: lista.reduce((t, o) => t + sim(v, o), 0) + 0.001 * v.length })).sort((a, b) => b.p - a.p)[0].v;
+      };
+      // se corta cuando el domicilio y el lugar se confirmaron en dos cuadros y está el CUIL (validado con el DNI);
+      // si no coinciden, se sigue mirando (hasta 5 cuadros) y gana el más parecido a los demás
+      // (si faltaba el vencimiento —DNI viejo— también tiene que salir de las líneas <<<, con sus dígitos de control)
+      const listoR = (intento) => acumR.cuil && confirmado(candDom) && (confirmado(candLug) || (acumR.lugarNacimiento && intento >= 3)) && (!conMRZ || acumR.fechaVencimiento || intento >= 3) && (!esNuevoR || qrR || intento >= 3);
       let subida = false;
       for (let intento = 1; intento <= MAX_R && autoScanActivo && !listoR(intento); intento++) {
         if (domicilioProgressText) domicilioProgressText.textContent = `Leyendo domicilio, lugar de nacimiento y CUIL… (${intento})`;
         if (domicilioProgressFill) domicilioProgressFill.style.width = '0%';
         if (intento > 1 && !subida && !(acumR.domicilio && domLimpio) && typeof subirResolucion === 'function') { subida = true; await subirResolucion(); }
         const c = await capturarMasNitidoRecortado(2, 60);
+        const pQRr = (esNuevoR && !qrR) ? QRDNINuevo.decodificar(c).catch(() => null) : null;
         try {
-          const r = await DomicilioOCR.leerReversoRapido(c, { dni: dniFrente, sexo, marcoRel: c.marcoRel || null, conMRZ: conMRZ && intento <= 2 && !(identR && identR.sexo && acumR.fechaVencimiento), intento }, (p) => {
+          const r = await DomicilioOCR.leerReversoRapido(c, { dni: dniFrente, sexo, marcoRel: c.marcoRel || null, conMRZ: conMRZ && intento <= 3 && !(identR && identR.sexo && acumR.fechaVencimiento), esperarMRZ: conMRZ && !acumR.fechaVencimiento && intento <= 3, intento }, (p) => {
             if (domicilioProgressFill) domicilioProgressFill.style.width = (p * 100) + '%';
           });
           if (!autoScanActivo) break;
           rawR += `\n===== intento ${intento} =====\n` + (r.raw || '');
-          if (r.domicilio && (!acumR.domicilio || (r.limpio && !domLimpio))) { acumR.domicilio = r.domicilio; domLimpio = !!r.limpio; mejorR = c; }
-          if (!acumR.lugarNacimiento && r.lugarNacimiento) acumR.lugarNacimiento = r.lugarNacimiento;
+          if (r.domicilio) { candDom.push(r.domicilio); porCuadroDom.set(r.domicilio, c); if (r.limpio) domLimpio = true; }
+          if (r.lugarNacimiento) candLug.push(r.lugarNacimiento);
+          acumR.domicilio = consenso(candDom); acumR.lugarNacimiento = DomicilioOCR.mejorLugar ? DomicilioOCR.mejorLugar(candLug) : consenso(candLug);
+          if (acumR.domicilio && porCuadroDom.has(acumR.domicilio)) mejorR = porCuadroDom.get(acumR.domicilio);
           if (!acumR.cuil && r.cuil) acumR.cuil = r.cuil;
           if (r.identidad && r.identidad.dni === String(dniFrente).replace(/\D/g, '') && (!identR || (r.identidad.verificada && !identR.verificada))) identR = r.identidad;
           if (!acumR.fechaVencimiento && r.fechaVencimiento) { acumR.fechaVencimiento = r.fechaVencimiento; acumR.nacionalidad = r.nacionalidad; }
           mejorR = mejorR || c;
+          if (pQRr) {
+            const rq = await Promise.race([pQRr, new Promise((ok) => setTimeout(() => ok(null), 2500))]);
+            if (rq && rq.datos && String(rq.datos.dni) === String(dniFrente).replace(/\D/g, '')) { qrR = rq.datos; rawR += '\n--- QR ---\n' + (rq.texto || ''); }
+          }
         } catch (e) { console.warn('Reverso rápido:', e); }
         // dos intentos sin leer nada: el DNI no está en el marco → se pasa a la lectura completa (la ubica sola)
         if (intento === 2 && !acumR.domicilio && !acumR.cuil && !acumR.lugarNacimiento) break;
@@ -1474,6 +1498,7 @@
         if (domInputNacionalidad) domInputNacionalidad.value = (ultimoResultado && ultimoResultado.nacionalidad) || acumR.nacionalidad || '';
         // sexo (y lo que falte) desde las líneas <<<, si coinciden con el DNI ya leído
         if (identR) ultimaIdentidad = Object.assign({}, ultimaIdentidad || {}, { sexo: identR.sexo, fechaVencimiento: acumR.fechaVencimiento || identR.fechaVencimiento, checks: identR.checks });
+        if (qrR) ultimaIdentidad = combinarIdentidad(qrR, identR ? Object.assign({}, identR, { fechaVencimiento: acumR.fechaVencimiento || identR.fechaVencimiento }) : ultimaIdentidad);
         if (identR && ultimoResultado && !ultimoResultado.sexo && identR.checks && identR.checks.nacimiento && identR.checks.vencimiento) ultimoResultado.sexo = identR.sexo;
         if (domicilioProgress) domicilioProgress.hidden = true;
         if (domicilioResultado) domicilioResultado.hidden = false;

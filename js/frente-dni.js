@@ -253,6 +253,8 @@ const FrenteDNI = (() => {
       dni: buscarDNI(lineas), apellido: normalizarNombre(n.apellido), nombre: normalizarNombre(n.nombre), sexo: sn.sexo, nacionalidad: sn.nac,
       fechaNacimiento: f.nac, fechaEmision: f.emi, fechaVencimiento: f.ven, ejemplar: ej ? ej[1] : null, tramite: tram ? tram[1] : null
     };
+    // la letra leída en la fila "M  ARGENTINA  B" (sexo, nacionalidad, ejemplar) es la lectura más confiable: vale doble
+    if (letraEj && r.ejemplar === letraEj) Object.defineProperty(r, 'ejemplarFila', { value: true, enumerable: false });
     return Object.keys(r).filter((k) => r[k]).length >= 3 ? r : null;
   }
 
@@ -346,6 +348,13 @@ const FrenteDNI = (() => {
       }
       let mv = null, mn = 0;
       c.forEach((n, v) => { if (n > mn || (n === mn && String(v).length > String(mv).length)) { mn = n; mv = v; } });
+      // v57: el ejemplar y el trámite solo se aceptan si al menos DOS lecturas distintas dicen lo mismo
+      // (una letra o un número leído una sola vez puede ser ruido: mejor vacío —y que lo complete el QR— que mal)
+      if ((k === 'ejemplar' || k === 'tramite') && mv) {
+        const veces = rs.filter((r) => r[k] === mv).length + (deZona[k] || []).filter((v) => v === mv).length
+          + (k === 'ejemplar' ? rs.filter((r) => r.ejemplar === mv && r.ejemplarFila).length : 0);
+        if (veces < 2) mv = null;
+      }
       out[k] = mv;
     });
     out.apellido = elegirNombre(rs.map((r) => r.apellido).filter(Boolean).concat(extra.apellido.map(comoNombre).filter(Boolean)));
@@ -415,7 +424,9 @@ const FrenteDNI = (() => {
 
   // ¿La lectura tiene todo y es coherente? (permite cortar el OCR antes y que el escaneo sea más rápido)
   function completo(r) {
+    // (v57: también el trámite y el ejemplar: si falta alguno se siguen leyendo las zonas en vez de cortar antes)
     return !!(r && r.dni && r.apellido && r.nombre && r.sexo && r.fechaNacimiento && r.fechaEmision && r.fechaVencimiento &&
+      /^\d{11}$/.test(r.tramite || '') && /^[A-Z]$/.test(r.ejemplar || '') &&
       (anioDe(r.fechaVencimiento) - anioDe(r.fechaEmision) === 15 || anioDe(r.fechaVencimiento) - anioDe(r.fechaEmision) === 8));
   }
 
