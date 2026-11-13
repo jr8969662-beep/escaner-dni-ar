@@ -95,6 +95,7 @@
   function fotoEnderezada(c, zona) {
     try {
       if (!c) return c;
+      if (!zona && c.marcoRel) zona = zonaRel(c, c.marcoRel);   // foto recortada con margen: se sabe dónde estaba el marco
       const r = typeof Encuadre !== 'undefined' ? Encuadre.enderezar(c, zona) : null;
       if (r) return r.canvas;
       // no encontró los bordes: por lo menos se queda solo lo que está dentro del recuadro (sin lo de afuera)
@@ -105,6 +106,11 @@
       }
       return c;
     } catch (e) { return c; }
+  }
+  function zonaRel(c, rel) {   // marco guardado como fracciones [x0, y0, x1, y1] de la foto c → píxeles
+    if (!c || !rel || rel.length !== 4) return null;
+    const z = { x: rel[0] * c.width, y: rel[1] * c.height, w: (rel[2] - rel[0]) * c.width, h: (rel[3] - rel[1]) * c.height };
+    return z.w > 50 && z.h > 30 ? z : null;
   }
   function zonaDelMarco(c) {   // dónde está el marco de escaneo, en píxeles de la foto c (sacada del video entero)
     try {
@@ -1057,6 +1063,8 @@
         const ic = new ImageCapture(domicilioTrack);
         const blob = await Promise.race([ic.takePhoto(), new Promise((_, no) => setTimeout(() => no(new Error('tiempo')), 2500))]);
         foto = await canvasDeBlob(blob);
+        try { const r = rectEnVideo(domicilioVideo, marcoClient(), 0); const vw = domicilioVideo.videoWidth, vh = domicilioVideo.videoHeight;
+          if (r.w > 50 && r.h > 50) marcoRel = [r.x / vw, r.y / vh, (r.x + r.w) / vw, (r.y + r.h) / vh]; } catch (e) { marcoRel = null; }
       }
     } catch (e) { foto = null; }
     // 2) si no: el cuadro más nítido del video, ENTERO (la tarjeta se ubica sola; se guarda dónde estaba el marco por las dudas)
@@ -1077,7 +1085,7 @@
     if (btnCapturarDomicilio) btnCapturarDomicilio.hidden = true;
     asegurarBotonCamaraNativa(false);
     if (domicilioVideo) domicilioVideo.hidden = true;
-    if (domicilioPreview) { domicilioPreview.src = fotoEnderezada(foto).toDataURL('image/jpeg', 0.92); domicilioPreview.hidden = false; }   // (calidad alta: se puede ampliar)
+    if (domicilioPreview) { domicilioPreview.src = fotoEnderezada(foto, zonaRel(foto, marcoRel)).toDataURL('image/jpeg', 0.92); domicilioPreview.hidden = false; }   // (calidad alta: se puede ampliar)
     if (domicilioResultado) domicilioResultado.hidden = true;
     if (domicilioProgress) domicilioProgress.hidden = false;
     if (domicilioProgressFill) domicilioProgressFill.style.width = '0%';
@@ -1454,7 +1462,7 @@
       if (autoScanActivo && (acumR.domicilio || acumR.cuil || acumR.lugarNacimiento)) {
         autoScanProcesando = false; autoScanActivo = false;
         detenerCamaraModal();
-        if (domicilioPreview && mejorR) { domicilioPreview.src = fotoEnderezada(mejorR).toDataURL('image/jpeg', 0.92); domicilioPreview.hidden = false; }
+        if (domicilioPreview && mejorR) { domicilioPreview.src = fotoEnderezada(mejorR, zonaRel(mejorR, mejorR.marcoRel)).toDataURL('image/jpeg', 0.92); domicilioPreview.hidden = false; }
         if (domicilioVideo) domicilioVideo.hidden = true;
         if (domInputDomicilio) domInputDomicilio.value = acumR.domicilio || '';
         if (domInputNacimiento) domInputNacimiento.value = acumR.lugarNacimiento || '';
@@ -1480,7 +1488,12 @@
 
     // 1.er intento: recortado al marco. Si no aparecieron las líneas <<< (DNI fuera del marco o girado), la imagen entera.
     const capturar = (intento) => (typeof capturarMasNitidoRecortado === 'function' && (intento === 1 || (ident && ident.dni)))
-      ? capturarMasNitidoRecortado(2, 100) : capturarMasNitido(domicilioVideo, 2, 100);
+      ? capturarMasNitidoRecortado(2, 100) : capturarMasNitido(domicilioVideo, 2, 100).then((c) => {
+        // cuadro entero: se anota dónde estaba el marco (para recortar la foto del reverso)
+        try { const r = rectEnVideo(domicilioVideo, marcoClient(), 0); const vw = domicilioVideo.videoWidth, vh = domicilioVideo.videoHeight;
+          if (c && r.w > 50 && r.h > 50 && !c.marcoRel) c.marcoRel = [r.x / vw, r.y / vh, (r.x + r.w) / vw, (r.y + r.h) / vh]; } catch (e) { /* sin marco */ }
+        return c;
+      });
 
     for (let intento = 1; intento <= MAX_INTENTOS && autoScanActivo && !completo(); intento++) {
       if (domicilioProgressText) domicilioProgressText.textContent = `Leyendo el reverso… (${intento}/${MAX_INTENTOS})`;
@@ -1527,7 +1540,7 @@
     ultimaIdentidad = hayIdentidad ? combinarIdentidad(qr, ident) : null;
     tramiteReverso = acum.tramite || null;
     detenerCamaraModal();
-    if (domicilioPreview && mejorCanvas) { domicilioPreview.src = fotoEnderezada(mejorCanvas).toDataURL('image/jpeg', 0.92); domicilioPreview.hidden = false; }
+    if (domicilioPreview && mejorCanvas) { domicilioPreview.src = fotoEnderezada(mejorCanvas, zonaRel(mejorCanvas, mejorCanvas.marcoRel)).toDataURL('image/jpeg', 0.92); domicilioPreview.hidden = false; }
     if (domicilioVideo) domicilioVideo.hidden = true;
     if (domInputDomicilio) domInputDomicilio.value = acum.domicilio || '';
     if (domInputNacimiento) domInputNacimiento.value = acum.lugarNacimiento || '';
